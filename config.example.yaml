@@ -1,0 +1,12 @@
+# Copy to config.yaml for personal settings (config.yaml is git-ignored).
+contact_email: ""          # sent in the User-Agent so OpenAlex/arXiv can contact you (polite pool)
+lookback_days: 730         # collect papers from the last 2 years
+update_interval_days: 7    # weekly update; runs automatically at startup when overdue
+keywords:
+  model: sentence-transformers/all-MiniLM-L6-v2   # small CPU embedding model for KeyBERT
+  top_n: 4
+sources:                   # turn individual academic APIs on/off
+  openalex: true
+  semantic_scholar: true
+  dblp: true
+  arxiv: true

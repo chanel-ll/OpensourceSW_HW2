@@ -1,0 +1,28 @@
+# secrets & personal settings
+.env
+config.yaml
+
+# runtime data, logs, model cache
+data/
+*.db
+*.sqlite*
+logs/
+*.log
+models/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Node / build
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
