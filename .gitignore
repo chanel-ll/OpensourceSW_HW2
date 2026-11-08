@@ -28,3 +28,21 @@ frontend/dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# GitHub self-hosted runner: installer, registration and runtime files (never commit)
+actions-runner/
+actions-runner-*.zip
+_work/
+_diag/
+_update/
+bin/
+externals/
+.runner
+.credentials
+.credentials_rsaparams
+.env.runner
+.path
+.service
+config.cmd
+run.cmd
+svc.cmd

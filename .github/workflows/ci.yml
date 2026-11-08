@@ -1,90 +1,101 @@
 name: CI — build & push Docker image
 
+# Runs on the self-hosted Windows runner (Docker Desktop must be running).
+# No pull_request trigger: on a public repo, fork PRs would otherwise run code on this PC.
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 env:
   IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/paper-universe
 
+defaults:
+  run:
+    shell: powershell
+
 jobs:
   docker:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows]
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Check Docker is running
+        run: |
+          docker version --format "Docker engine {{.Server.Version}} ({{.Server.Os}})"
+          if ($LASTEXITCODE -ne 0) { throw "Docker Desktop is not running on the runner PC" }
 
-      # The Dockerfile itself downloads the pinned model and fails the build if it does not load offline.
+      # The Dockerfile downloads the pinned model and fails the build if it does not load offline.
+      # Default (docker) builder: layer cache stays on this PC between runs.
       - name: Build image (model download + offline load check)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          load: true
-          tags: paper-universe:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: |
+          docker build --platform linux/amd64 -t paper-universe:ci .
+          if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
 
       - name: Smoke test — app starts, UI and API respond
         run: |
-          docker run -d --name app -p 8000:8000 paper-universe:ci
-          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8000/api/status && break; sleep 2; done
-          curl -sf http://127.0.0.1:8000/api/status | grep -q '"llm"'
-          curl -sf http://127.0.0.1:8000/ | grep -q '<div id="root">'
-          docker exec app sh -c 'cd backend && python -m app.keywords'
-          echo "smoke test passed"
+          cmd /c "docker rm -f pu-ci >nul 2>&1"
+          docker run -d --name pu-ci -p 127.0.0.1:18000:8000 paper-universe:ci | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "container did not start" }
+          $ok = $false
+          for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
+            try { $s = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:18000/api/status; $ok = $true }
+            catch { Start-Sleep -Seconds 2 }
+          }
+          if (-not $ok) { throw "API did not respond within 2 minutes" }
+          if ($s.Content -notmatch '"llm"') { throw "unexpected /api/status response" }
+          $ui = Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 http://127.0.0.1:18000/
+          if ($ui.Content -notmatch '<div id="root">') { throw "UI is not served" }
+          docker exec pu-ci sh -c "cd backend && python -m app.keywords"
+          if ($LASTEXITCODE -ne 0) { throw "model check failed inside the container" }
+          Write-Host "smoke test passed"
 
       - name: Container logs on failure
         if: failure()
-        run: docker logs app || true
+        run: |
+          cmd /c "docker logs --tail 100 pu-ci 2>&1"
+          exit 0
+
+      - name: Remove test container
+        if: always()
+        run: |
+          cmd /c "docker rm -f pu-ci >nul 2>&1"
+          exit 0
 
       # Explains login failures like "malformed HTTP Authorization header" without ever printing the values.
       - name: Check Docker Hub secrets (format only)
-        if: github.event_name != 'pull_request'
         env:
           U: ${{ secrets.DOCKERHUB_USERNAME }}
           T: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          python3 - <<'EOF'
-          import os, sys
-          ok = True
-          for name, key in (("DOCKERHUB_USERNAME", "U"), ("DOCKERHUB_TOKEN", "T")):
-              v = os.environ.get(key, "")
-              s = v.strip()
-              p = []
-              if not v:
-                  p.append("empty: not a *Repository* secret, or the name is misspelled")
-              if v != s:
-                  p.append("leading/trailing space or newline")
-              if any(ord(c) < 33 or ord(c) > 126 for c in s):
-                  p.append("contains spaces, newlines or non-ASCII (e.g. Korean / full-width) characters")
-              if s and (s[0] in "\"'" or s[-1] in "\"'"):
-                  p.append("wrapped in quotes")
-              if key == "U" and "@" in s:
-                  p.append("looks like an email; use the Docker Hub username")
-              if key == "U" and s != s.lower():
-                  p.append("has uppercase letters; Docker Hub usernames are lowercase")
-              if key == "T" and s and not s.startswith("dckr_pat_"):
-                  p.append("does not start with dckr_pat_ (is this a password instead of an access token?)")
-              print(f"{name}: length {len(v)} -> " + ("OK" if not p else "PROBLEM: " + "; ".join(p)))
-              ok = ok and not p
-          sys.exit(0 if ok else 1)
-          EOF
+          $bad = $false
+          foreach ($k in 'U', 'T') {
+            $name = @{ U = 'DOCKERHUB_USERNAME'; T = 'DOCKERHUB_TOKEN' }[$k]
+            $v = [Environment]::GetEnvironmentVariable($k)
+            if ($null -eq $v) { $v = '' }
+            $s = $v.Trim()
+            $p = @()
+            if ($v -eq '') { $p += 'empty: not a Repository secret, or the name is misspelled' }
+            if ($v -ne $s) { $p += 'leading/trailing space or newline' }
+            if ($s -match '[^\x21-\x7E]') { $p += 'contains spaces or non-ASCII (e.g. Korean) characters' }
+            if ($s -match '^[''"]|[''"]$') { $p += 'wrapped in quotes' }
+            if ($k -eq 'U' -and $s -match '@') { $p += 'looks like an email; use the Docker Hub username' }
+            if ($k -eq 'U' -and $s -cne $s.ToLower()) { $p += 'has uppercase letters; Docker Hub usernames are lowercase' }
+            if ($k -eq 'T' -and $s -and -not $s.StartsWith('dckr_pat_')) { $p += 'does not start with dckr_pat_ (password instead of an access token?)' }
+            if ($p.Count) { $bad = $true; Write-Host "${name}: length $($v.Length) -> PROBLEM: $($p -join '; ')" }
+            else { Write-Host "${name}: length $($v.Length) -> OK" }
+          }
+          if ($bad) { exit 1 }
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Tags
-        if: github.event_name != 'pull_request'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -93,13 +104,13 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
 
-      - name: Push to Docker Hub (reuses the cached build)
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
+      # Push exactly the image that passed the smoke test.
+      - name: Push to Docker Hub
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          foreach ($t in ($env:TAGS -split "`r?`n" | Where-Object { $_ })) {
+            docker tag paper-universe:ci $t
+            docker push $t
+            if ($LASTEXITCODE -ne 0) { throw "push failed: $t" }
+          }

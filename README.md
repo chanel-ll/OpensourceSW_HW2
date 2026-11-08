@@ -113,6 +113,17 @@ DB와 노트는 볼륨(`paper-universe-data`, `paper-universe-notes`)에 남으�
 
 CI 설정: GitHub 저장소 Settings → Secrets and variables → Actions에 `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`(Docker Hub Access Token, Read & Write)을 등록합니다.
 
+### 자동 배포 (self-hosted runner)
+
+CI가 이미지를 Docker Hub에 올리면 `.github/workflows/deploy.yml`이 같은 PC의 self-hosted Windows 러너에서
+그 이미지(`sha-<커밋>`)를 받아 로컬 컨테이너 `paper-universe`를 교체합니다.
+
+- 접속: **http://127.0.0.1:8090** · 재시작 정책 `unless-stopped`(Docker Desktop이 켜지면 자동 실행)
+- 데이터·노트는 Docker 볼륨(`paper-universe-data`, `paper-universe-notes`)에 남아 재배포해도 유지됩니다.
+- 새 컨테이너가 2분 안에 응답하지 않으면 로그를 남기고 이전 이미지로 자동 롤백합니다.
+- 러너 PC의 `%USERPROFILE%\.paper-universe\.env`(LLM 키)와 `config.yaml`이 있으면 컨테이너에 적용됩니다(저장소에는 올라가지 않음).
+- 필요 조건: 러너(`run.cmd` 또는 서비스)와 Docker Desktop 실행 중. Actions 탭의 "Deploy" → Run workflow로 수동 재배포도 가능합니다.
+
 ## 노트 파일 (Obsidian 호환)
 
 ```

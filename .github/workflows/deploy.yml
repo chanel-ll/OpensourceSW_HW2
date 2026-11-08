@@ -1,0 +1,119 @@
+name: Deploy — replace local container
+
+# After CI pushes a new image, the self-hosted Windows runner pulls it and swaps the running container.
+# Service: http://127.0.0.1:8090  (data/notes in Docker volumes, survive every redeploy)
+# Optional on the runner PC: %USERPROFILE%\.paper-universe\.env (LLM keys) and \config.yaml (personal settings).
+on:
+  workflow_run:
+    workflows: ["CI — build & push Docker image"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:     # manual redeploy of :latest
+
+concurrency:
+  group: deploy-local
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: powershell
+
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/paper-universe
+  CONTAINER: paper-universe
+  HOST_PORT: "8090"
+
+jobs:
+  deploy:
+    # only a successful CI run triggered by a push to this repository (never a fork)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: [self-hosted, Windows]
+    permissions:
+      contents: read
+    steps:
+      - name: Check Docker is running
+        run: |
+          docker version --format "Docker engine {{.Server.Version}} ({{.Server.Os}})"
+          if ($LASTEXITCODE -ne 0) { throw "Docker Desktop is not running on the runner PC" }
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull the image CI just pushed
+        id: pull
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # CI tags every push as sha-<7 chars> (docker/metadata-action type=sha,format=short)
+          $tag = if ($env:HEAD_SHA) { "sha-" + $env:HEAD_SHA.Substring(0, 7) } else { "latest" }
+          $ref = "$($env:IMAGE):$tag"
+          docker pull $ref
+          if ($LASTEXITCODE -ne 0) { throw "pull failed: $ref" }
+          "ref=$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "deploying $ref"
+
+      - name: Replace container
+        id: swap
+        env:
+          REF: ${{ steps.pull.outputs.ref }}
+        run: |
+          # remember what was running, for rollback
+          $prev = docker ps -aq -f "name=^$($env:CONTAINER)$"
+          $prevImage = if ($prev) { docker inspect -f "{{.Config.Image}}" $env:CONTAINER } else { "" }
+          "prev=$prevImage" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if ($prev) { cmd /c "docker rm -f $($env:CONTAINER) >nul 2>&1" }
+
+          $cfgDir = Join-Path $env:USERPROFILE ".paper-universe"
+          $extra = @()
+          if (Test-Path "$cfgDir\.env") { $extra += @("--env-file", "$cfgDir\.env"); Write-Host "using $cfgDir\.env" }
+          if (Test-Path "$cfgDir\config.yaml") { $extra += @("-v", "${cfgDir}\config.yaml:/app/config.yaml:ro"); Write-Host "using $cfgDir\config.yaml" }
+
+          docker run -d --name $env:CONTAINER --restart unless-stopped `
+            -p "127.0.0.1:$($env:HOST_PORT):8000" `
+            -v paper-universe-data:/app/data -v paper-universe-notes:/app/notes -v paper-universe-logs:/app/logs `
+            @extra $env:REF | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "docker run failed" }
+
+      - name: Wait until the service answers
+        run: |
+          $url = "http://127.0.0.1:$($env:HOST_PORT)"
+          $ok = $false
+          $deadline = (Get-Date).AddMinutes(2)
+          while (-not $ok -and (Get-Date) -lt $deadline) {
+            try {
+              $s = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "$url/api/status"
+              $ui = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "$url/"
+              $ok = ($s.Content -match '"llm"') -and ($ui.Content -match '<div id="root">')
+            } catch { }
+            if (-not $ok) { Start-Sleep -Seconds 2 }
+          }
+          if (-not $ok) { throw "service did not answer at $url within 2 minutes" }
+          $state = docker inspect -f "{{.State.Status}} restarts={{.RestartCount}}" $env:CONTAINER
+          Write-Host "deployed and serving at $url ($state)"
+
+      - name: Logs and rollback on failure
+        if: failure() && steps.swap.outcome != 'skipped'
+        env:
+          PREV: ${{ steps.swap.outputs.prev }}
+        run: |
+          Write-Host "---- logs of the failed container ----"
+          cmd /c "docker logs --tail 100 $($env:CONTAINER) 2>&1"
+          if ($env:PREV) {
+            Write-Host "---- rolling back to $($env:PREV) ----"
+            cmd /c "docker rm -f $($env:CONTAINER) >nul 2>&1"
+            $cfgDir = Join-Path $env:USERPROFILE ".paper-universe"
+            $extra = @()
+            if (Test-Path "$cfgDir\.env") { $extra += @("--env-file", "$cfgDir\.env") }
+            if (Test-Path "$cfgDir\config.yaml") { $extra += @("-v", "${cfgDir}\config.yaml:/app/config.yaml:ro") }
+            docker run -d --name $env:CONTAINER --restart unless-stopped -p "127.0.0.1:$($env:HOST_PORT):8000" `
+              -v paper-universe-data:/app/data -v paper-universe-notes:/app/notes -v paper-universe-logs:/app/logs `
+              @extra $env:PREV | Out-Null
+          }
+          exit 0
