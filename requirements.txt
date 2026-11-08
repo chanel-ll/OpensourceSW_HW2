@@ -1,11 +1,23 @@
-# CPU-only PyTorch wheel (no GPU needed)
+# Versions verified together on Python 3.13 (Windows venv + Linux Docker image).
+# CPU-only PyTorch (no GPU / CUDA download)
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.15.0
+torch==2.15.0+cpu
+# web / storage / HTTP
 fastapi==0.162.0
+starlette==1.10.0
+pydantic==2.14.1
 uvicorn[standard]==0.54.0
 SQLAlchemy==2.1.6
 httpx==0.28.1
 python-dotenv==1.2.4
 PyYAML==6.0.3
+# keywords, embeddings, clustering (all-MiniLM-L6-v2 @ 1110a243 loads with these)
 keybert==0.9.0
 sentence-transformers==6.2.0
+transformers==5.21.0
+tokenizers==0.23.3
+huggingface_hub==2.3.0
+safetensors==0.8.0
+numpy==2.5.4
+scipy==1.18.1
+scikit-learn==1.9.1

@@ -126,7 +126,10 @@ export function SourceView({ source: s, llm, registered, onChanged, onDeleted }:
         </dl>
         <div className="row">
           <button onClick={() => act(() => api(`/sources/${s.id}/collect`, { method: 'POST' }))} disabled={s.status === 'collecting'}>다시 수집</button>
-          <button disabled title="Research World는 P2에서 제공 예정">World에 포함 (준비 중)</button>
+          <button aria-pressed={s.include_in_world} title="이 소스의 논문 전체를 Research World에 넣습니다"
+            onClick={() => act(() => api(`/sources/${s.id}`, { method: 'PATCH', json: { include_in_world: !s.include_in_world } }))}>
+            {s.include_in_world ? '✓ World에 포함됨' : 'World에 포함'}
+          </button>
           <button className="danger" onClick={() => window.confirm(`'${s.name}' 소스를 삭제할까요?`) && act(async () => { await api(`/sources/${s.id}`, { method: 'DELETE' }); onDeleted() })}>소스 삭제</button>
         </div>
         {s.status === 'collecting' && <p className="notice">논문 수집 중… {s.status_message}</p>}

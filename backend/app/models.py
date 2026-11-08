@@ -1,7 +1,8 @@
-"""SQLite schema. P1 (Note, Project, ProjectReference) and P2 (Field, Edge) tables will hang off Paper.id / Source.id."""
+"""SQLite schema. Note bodies live as markdown files under notes/ (Obsidian-compatible); the DB only maps them."""
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event
+from sqlalchemy import (JSON, Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, String, Text,
+                        UniqueConstraint, create_engine, event, inspect, text)
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 from .settings import DB_URL
@@ -71,9 +72,66 @@ class Paper(Base):
     keywords = Column(JSON, default=list)    # KeyBERT
     summary = Column(JSON)                    # {one_line, contributions[], keywords[], model, created_at}
     starred = Column(Boolean, default=False)
+    starred_at = Column(DateTime)              # Library sort order
     hidden = Column(Boolean, default=False)
     created_at = Column(DateTime, default=now)
     updated_at = Column(DateTime, default=now)
+    references = Column(JSON, default=list)    # OpenAlex ids this paper cites (citation edges inside the app)
+    embedding = Column(LargeBinary)            # float32 MiniLM vector of title+abstract
+    subfield_id = Column(Integer, ForeignKey("subfields.id", ondelete="SET NULL"))
+    subfield_pinned = Column(Boolean, default=False)  # user moved it -> reclassification keeps it
+    note_file = Column(String)                 # notes/papers/<file>.md once a memo exists
+
+
+class Field(Base):
+    __tablename__ = "fields"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, default="")
+    name_locked = Column(Boolean, default=False)  # user renamed -> kept across reclassification
+
+
+class Subfield(Base):
+    __tablename__ = "subfields"
+    id = Column(Integer, primary_key=True)
+    field_id = Column(Integer, ForeignKey("fields.id", ondelete="SET NULL"))
+    name = Column(String, default="")
+    name_locked = Column(Boolean, default=False)
+    field_pinned = Column(Boolean, default=False)  # user moved/merged it into a field
+
+
+class Project(Base):
+    __tablename__ = "projects"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, default="")
+    status = Column(String, default="아이디어")  # 아이디어 | 진행 중 | 투고 준비 | 완료
+    folder = Column(String, nullable=False)     # notes/projects/<folder>/
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now)
+
+
+class LibraryGroup(Base):
+    """User-made groups for starred papers; a paper may sit in several groups."""
+    __tablename__ = "library_groups"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=now)
+
+
+class LibraryItem(Base):
+    __tablename__ = "library_items"
+    group_id = Column(Integer, ForeignKey("library_groups.id", ondelete="CASCADE"), primary_key=True)
+    paper_id = Column(Integer, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True)
+    added_at = Column(DateTime, default=now)
+
+
+class ProjectReference(Base):
+    __tablename__ = "project_references"
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    paper_id = Column(Integer, ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True)
+    role = Column(String, default="관련 연구")  # 베이스라인 | 관련 연구 | 방법론 참고 | 데이터셋
+    memo = Column(Text, default="")
+    added_at = Column(DateTime, default=now)
 
 
 class PaperSource(Base):
@@ -105,3 +163,20 @@ class PaperChange(Base):
 
 
 Base.metadata.create_all(engine)
+
+
+def _add_missing_columns():
+    """create_all never alters existing tables; add new nullable columns so older DBs keep working."""
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in have:
+                    ddl = col.type.compile(engine.dialect)
+                    default = col.default.arg if col.default is not None and not callable(col.default.arg) else None
+                    extra = f" DEFAULT {int(default) if isinstance(default, bool) else repr(default)}" if default is not None and not isinstance(default, (list, dict)) else ""
+                    conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {ddl}{extra}'))
+
+
+_add_missing_columns()

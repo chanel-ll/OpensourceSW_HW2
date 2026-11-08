@@ -1,0 +1,14 @@
+# never bake secrets, personal data or local builds into the image
+.git
+.github
+.env
+config.yaml
+data/
+logs/
+notes/
+models/
+.venv/
+**/__pycache__/
+frontend/node_modules/
+frontend/dist/
+*.db

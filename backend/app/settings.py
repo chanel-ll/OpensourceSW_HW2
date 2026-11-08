@@ -14,8 +14,12 @@ DEFAULTS = {
     "contact_email": "",            # OpenAlex/arXiv polite pool (User-Agent mailto)
     "lookback_days": 730,            # "최근 2년"
     "update_interval_days": 7,
-    "keywords": {"model": "sentence-transformers/all-MiniLM-L6-v2", "top_n": 4},
+    # revision = Hugging Face commit, pinned so every machine/image gets the same weights
+    "keywords": {"model": "sentence-transformers/all-MiniLM-L6-v2", "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+                 "top_n": 4},
     "sources": {"semantic_scholar": True, "openalex": True, "dblp": True, "arxiv": True},
+    "notes_dir": "notes",            # markdown notes; can point at (a folder inside) an Obsidian vault
+    "world": {"assign_threshold": 0.3, "candidate_min": 3, "similar_top_k": 3, "similar_min": 0.5},
 }
 
 
@@ -25,7 +29,7 @@ def _load_yaml() -> dict:
         p = ROOT / "config.example.yaml"
     data = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
     cfg = {**DEFAULTS, **(data or {})}
-    for k in ("keywords", "sources"):
+    for k in ("keywords", "sources", "world"):
         cfg[k] = {**DEFAULTS[k], **((data or {}).get(k) or {})}
     return cfg
 
@@ -49,6 +53,7 @@ DATA_DIR.mkdir(exist_ok=True)
 (ROOT / "logs").mkdir(exist_ok=True)
 DB_URL = os.getenv("DB_URL", f"sqlite:///{(DATA_DIR / 'research_tracker.db').as_posix()}")
 MODEL_DIR = ROOT / "models"
+NOTES_DIR = Path(os.getenv("NOTES_DIR") or ROOT / CFG["notes_dir"])
 
 logging.basicConfig(
     level=logging.INFO,

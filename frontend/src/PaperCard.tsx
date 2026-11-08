@@ -1,5 +1,36 @@
-import { useState } from 'react'
-import { api, type Paper, type Status } from './api'
+import { useState, type ReactNode } from 'react'
+import { api, href, ROLES, type Paper, type ProjectSummary, type Status } from './api'
+
+/** "프로젝트에 추가": pick a project (and role) inline. */
+export function AddToProject({ paperId, onAdded }: { paperId: number; onAdded?: () => void }) {
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null)
+  const [role, setRole] = useState(ROLES[1])
+  const [msg, setMsg] = useState('')
+  if (projects === null)
+    return <button onClick={() => api<ProjectSummary[]>('/projects').then(setProjects, (e) => setMsg(e.message))}>프로젝트에 추가</button>
+  if (!projects.length) return <span className="muted small">프로젝트가 없습니다. <a href={href('projects')}>My Research</a>에서 먼저 만드세요.</span>
+  async function add(pid: number) {
+    try {
+      await api(`/projects/${pid}/references`, { method: 'POST', json: { paper_id: paperId, role } })
+      setMsg(`'${projects!.find((p) => p.id === pid)?.name}'에 추가됨`)
+      setProjects(null)
+      onAdded?.()
+    } catch (e) {
+      setMsg((e as Error).message)
+    }
+  }
+  return (
+    <span className="row inline">
+      <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="역할 태그">{ROLES.map((r) => <option key={r}>{r}</option>)}</select>
+      <select defaultValue="" onChange={(e) => e.target.value && add(+e.target.value)} aria-label="추가할 프로젝트">
+        <option value="" disabled>프로젝트 선택…</option>
+        {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      <button onClick={() => setProjects(null)}>취소</button>
+      {msg && <span className="muted small">{msg}</span>}
+    </span>
+  )
+}
 
 type Props = {
   paper: Paper
@@ -7,12 +38,13 @@ type Props = {
   registered: Set<string> // openalex ids, s2 ids and normalized names of registered authors
   onChange: (p: Paper) => void
   onRead?: (ids: number[]) => void
+  extra?: ReactNode // e.g. Library group chips
 }
 
 const LINK_LABEL: Record<string, string> = { arxiv: 'arXiv', pdf: 'PDF', doi: 'DOI', s2: 'Semantic Scholar', code: '코드', project: '프로젝트' }
 export const normName = (n: string) => n.toLowerCase().replace(/[^a-z]/g, '')
 
-export function PaperCard({ paper: p, llm, registered, onChange, onRead }: Props) {
+export function PaperCard({ paper: p, llm, registered, onChange, onRead, extra }: Props) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -50,9 +82,10 @@ export function PaperCard({ paper: p, llm, registered, onChange, onRead }: Props
         <span className="muted">{p.pub_date ?? p.year ?? ''}</span>
       </div>
       <h3 className="card-title">
-        <button className="link-btn" title="abstract 펼치기 (논문 노트는 P1에서 제공)" onClick={() => { setOpen(!open); if (p.change && !read) onRead?.(p.change.ids) }}>
+        <a className="title-link" href={href('paper', p.id)} title="논문 노트 열기" onClick={() => { if (p.change && !read) onRead?.(p.change.ids) }}>
           {p.title}
-        </button>
+        </a>
+        <button className="link-btn small" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'abstract 접기' : 'abstract'}</button>
       </h3>
       <p className="authors">
         {authors.map((a, i) => (
@@ -60,6 +93,7 @@ export function PaperCard({ paper: p, llm, registered, onChange, onRead }: Props
         ))}
       </p>
       {chips.length > 0 && <div className="chips">{chips.map((k) => <span key={k} className="chip">{k}</span>)}</div>}
+      {extra}
       {p.summary && <p className="summary"><b>한줄 요약</b> {p.summary.one_line}</p>}
       {open && (
         <div className="detail">
@@ -81,10 +115,10 @@ export function PaperCard({ paper: p, llm, registered, onChange, onRead }: Props
               {busy ? '요약 중…' : '요약'}
             </button>
           )}
-          <button onClick={() => patch({ starred: !p.starred })} aria-pressed={p.starred} title="관심 표시 (Research World 연동은 P2)">
+          <button onClick={() => patch({ starred: !p.starred })} aria-pressed={p.starred} title="관심 표시 — Research World에 포함">
             {p.starred ? '★' : '☆'}
           </button>
-          <button disabled title="My Research는 P1에서 제공 예정">프로젝트에 추가</button>
+          <AddToProject paperId={p.id} />
           <button onClick={() => patch({ hidden: !p.hidden })}>{p.hidden ? '보이기' : '숨기기'}</button>
           {p.change && !read && <button onClick={() => onRead?.(p.change!.ids)}>읽음</button>}
         </div>

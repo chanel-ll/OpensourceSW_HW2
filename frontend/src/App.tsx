@@ -1,17 +1,38 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AddSource } from './AddSource'
-import { api, fmtDate, type Source, type Status } from './api'
+import { api, fmtDate, go, href, parseHash, type Route, type Source, type Status } from './api'
+import { Library } from './Library'
+import { PaperNote } from './PaperNote'
+import { ProjectList, ProjectPage } from './Projects'
 import { PaperList, registeredSet, SourceView } from './SourceView'
 import { Weekly } from './Weekly'
 
-type View =
-  | { kind: 'home' } | { kind: 'add' } | { kind: 'weekly' }
-  | { kind: 'source'; id: number } | { kind: 'search'; q: string } | { kind: 'soon'; name: string; phase: string }
+const World = lazy(() => import('./World').then((m) => ({ default: m.World }))) // three.js only when needed
 
-const SOON = { world: ['Research World', 'P2'], research: ['My Research', 'P1'], settings: ['설정', 'P3'] } as const
+/** One broken screen must not blank the whole app. */
+class Boundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  componentDidUpdate(prev: { resetKey: string }) { if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null }) }
+  render() {
+    return this.state.error
+      ? <section className="page"><h1>화면을 표시하지 못했습니다</h1><p className="error">{this.state.error.message}</p><p className="muted">다른 메뉴는 정상적으로 사용할 수 있습니다.</p></section>
+      : this.props.children
+  }
+}
+
+function useRoute() {
+  const [route, setRoute] = useState<Route>(() => parseHash(location.hash))
+  useEffect(() => {
+    const on = () => { setRoute(parseHash(location.hash)); window.scrollTo(0, 0) }
+    window.addEventListener('hashchange', on)
+    return () => window.removeEventListener('hashchange', on)
+  }, [])
+  return route
+}
 
 export default function App() {
-  const [view, setView] = useState<View>({ kind: 'home' })
+  const view = useRoute()
   const [sources, setSources] = useState<Source[]>([])
   const [status, setStatus] = useState<Status | null>(null)
   const [statusErr, setStatusErr] = useState('')
@@ -36,7 +57,7 @@ export default function App() {
   }, [loadSources, loadStatus])
 
   useEffect(() => {
-    if (view.kind === 'home' && sources.length) setView({ kind: 'source', id: sources[0].id })
+    if (view.kind === 'home' && sources.length) location.replace(href('source', sources[0].id))
   }, [view.kind, sources])
 
   async function update() {
@@ -51,12 +72,13 @@ export default function App() {
   const current = view.kind === 'source' ? sources.find((s) => s.id === view.id) : undefined
   const registered = registeredSet(sources)
   const llm = status?.llm ?? { enabled: false, model: '', reason: '상태 확인 중' }
+  const JOB: Record<string, string> = { weekly: 'Weekly 업데이트', collect: '논문 수집', embed: '임베딩 계산' }
 
   return (
-    <div className="app">
+    <div className={`app${view.kind === 'world' ? ' app-world' : ''}`}>
       <header className="topbar">
-        <div className="brand">Research Tracker</div>
-        <form className="search" onSubmit={(e) => { e.preventDefault(); if (search.trim()) setView({ kind: 'search', q: search.trim() }) }}>
+        <a className="brand" href="#/">Research Tracker</a>
+        <form className="search" onSubmit={(e) => { e.preventDefault(); if (search.trim()) go('search', search.trim()) }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="논문 제목 · 키워드 · 저자 검색" aria-label="전역 검색" />
         </form>
         <div className="top-status">
@@ -67,36 +89,37 @@ export default function App() {
           <button onClick={update} disabled={busy}>{busy && status?.job.kind === 'weekly' ? '업데이트 중…' : '지금 업데이트'}</button>
         </div>
       </header>
-      {busy && <div className="jobbar">{status!.job.kind === 'weekly' ? 'Weekly 업데이트' : '논문 수집'}: {status!.job.message}</div>}
+      {busy && <div className="jobbar">{JOB[status!.job.kind] ?? status!.job.kind}: {status!.job.message}</div>}
       {statusErr && <div className="jobbar error">{statusErr}</div>}
       {flash && <div className="jobbar warn" onClick={() => setFlash('')}>{flash} (닫기)</div>}
 
       <nav className="sidebar" aria-label="메뉴">
         <div className="nav-group">Research Scrap</div>
         {sources.map((s) => (
-          <button key={s.id} className={`nav-item sub${view.kind === 'source' && view.id === s.id ? ' active' : ''}`} onClick={() => setView({ kind: 'source', id: s.id })} title={s.name}>
+          <a key={s.id} href={href('source', s.id)} className={`nav-item sub${view.kind === 'source' && view.id === s.id ? ' active' : ''}`} title={s.name}>
             <span className="ellipsis">{s.name}</span>
             <span className="muted">{s.status === 'collecting' ? '수집 중' : s.status === 'error' ? '오류' : s.paper_count}</span>
-          </button>
+          </a>
         ))}
-        <button className={`nav-item sub add${view.kind === 'add' ? ' active' : ''}`} onClick={() => setView({ kind: 'add' })}>+ 소스 추가</button>
-        <button className={`nav-item${view.kind === 'weekly' ? ' active' : ''}`} onClick={() => setView({ kind: 'weekly' })}>
+        <a href={href('add')} className={`nav-item sub add${view.kind === 'add' ? ' active' : ''}`}>+ 소스 추가</a>
+        <a href={href('weekly')} className={`nav-item${view.kind === 'weekly' ? ' active' : ''}`}>
           Weekly Paper {!!status?.unread_changes && <span className="badge badge-new">{status.unread_changes}</span>}
-        </button>
-        {(['world', 'research'] as const).map((k) => (
-          <button key={k} className="nav-item" onClick={() => setView({ kind: 'soon', name: SOON[k][0], phase: SOON[k][1] })}>
-            {SOON[k][0]} <span className="tag">준비 중</span>
-          </button>
-        ))}
+        </a>
+        <a href={href('library')} className={`nav-item${view.kind === 'library' ? ' active' : ''}`}>
+          Library {!!status?.starred_count && <span className="muted">{status.starred_count}</span>}
+        </a>
+        <a href={href('world')} className={`nav-item${view.kind === 'world' ? ' active' : ''}`}>Research World</a>
+        <a href={href('projects')} className={`nav-item${view.kind === 'projects' || view.kind === 'project' ? ' active' : ''}`}>My Research</a>
         <div className="spacer" />
-        <button className="nav-item" onClick={() => setView({ kind: 'soon', name: SOON.settings[0], phase: SOON.settings[1] })}>설정 <span className="tag">준비 중</span></button>
+        <a href={href('settings')} className={`nav-item${view.kind === 'settings' ? ' active' : ''}`}>설정 <span className="tag">준비 중</span></a>
       </nav>
 
       <main className="main">
-        {view.kind === 'add' && <AddSource onCreated={(s) => { loadSources(); loadStatus(); setView({ kind: 'source', id: s.id }) }} />}
+        <Boundary resetKey={location.hash}>
+        {view.kind === 'add' && <AddSource onCreated={(s) => { loadSources(); loadStatus(); go('source', s.id) }} />}
         {view.kind === 'source' && current && (
           <SourceView key={current.id} source={current} llm={llm} registered={registered} onChanged={() => { loadSources(); loadStatus() }}
-            onDeleted={() => { loadSources(); setView({ kind: 'home' }) }} />
+            onDeleted={() => { loadSources(); go('') }} />
         )}
         {view.kind === 'weekly' && status && <Weekly status={status} sources={sources} registered={registered} onUpdate={update} onRead={loadStatus} />}
         {view.kind === 'search' && (
@@ -105,16 +128,22 @@ export default function App() {
             <PaperList query={`q=${encodeURIComponent(view.q)}`} llm={llm} registered={registered} reloadKey={view.q} />
           </section>
         )}
-        {view.kind === 'soon' && (
-          <section className="page soon"><h1>{view.name}</h1><p>준비 중입니다. ({view.phase} 단계에서 제공 예정)</p></section>
+        {view.kind === 'paper' && <PaperNote key={view.id} id={view.id} llm={llm} registered={registered} />}
+        {view.kind === 'library' && <Library group={view.group} llm={llm} registered={registered} onChanged={loadStatus} />}
+        {view.kind === 'projects' && <ProjectList />}
+        {view.kind === 'project' && <ProjectPage key={view.id} id={view.id} tab={view.tab} note={view.note} />}
+        {view.kind === 'world' && <Suspense fallback={<p className="muted">Research World 불러오는 중…</p>}><World sources={sources} focus={view.focus} onSourcesChanged={loadSources} /></Suspense>}
+        {view.kind === 'settings' && (
+          <section className="page soon"><h1>설정</h1><p>준비 중입니다. (P3) 지금은 config.yaml과 .env를 직접 수정하세요.</p></section>
         )}
         {view.kind === 'home' && (
           <section className="page soon">
             <h1>Research Tracker</h1>
             <p>관심 연구실·팀·연구자를 등록하면 최근 2년 논문을 모아 보여줍니다.</p>
-            <button className="primary" onClick={() => setView({ kind: 'add' })}>+ 첫 소스 추가</button>
+            <a className="btn primary" href={href('add')}>+ 첫 소스 추가</a>
           </section>
         )}
+        </Boundary>
       </main>
     </div>
   )

@@ -229,46 +229,58 @@ def author_candidates(name, hint=""):
 
 def _rec(**kw):
     base = {"title": "", "abstract": "", "year": None, "pub_date": None, "venue": "", "authors": [], "doi": None,
-            "arxiv_id": None, "s2_id": None, "openalex_id": None, "links": {}, "provider": ""}
+            "arxiv_id": None, "s2_id": None, "openalex_id": None, "links": {}, "provider": "", "references": []}
     base.update(kw)
     return base
 
 
+OA_SELECT = ("id,doi,title,publication_year,publication_date,abstract_inverted_index,primary_location,locations,"
+             "authorships,ids,type,referenced_works")
+
+
+def _oa_id(url):
+    return (url or "").rsplit("/", 1)[-1]
+
+
+def _oa_rec(w):
+    inv = w.get("abstract_inverted_index") or {}
+    abstract = " ".join(word for _, word in sorted((p, k) for k, ps in inv.items() for p in ps))
+    arx, pdf, venue_names = None, None, []
+    for loc in w.get("locations") or []:
+        src = loc.get("source") or {}
+        venue_names.append((src.get("display_name") or "", src.get("type")))
+        if "arxiv" in (src.get("display_name") or "").lower() or "arxiv.org" in (loc.get("landing_page_url") or ""):
+            arx = arx or arxiv_from(loc.get("landing_page_url"))
+        pdf = pdf or loc.get("pdf_url")
+    doi = (w.get("doi") or "").replace("https://doi.org/", "") or None
+    if doi and "arxiv" in doi.lower():
+        arx, doi = arx or arxiv_from(doi), None
+    primary = ((w.get("primary_location") or {}).get("source") or {})
+    venue = primary.get("display_name") or ""
+    if primary.get("type") == "repository":  # prefer a journal/conference location if one exists
+        venue = next((n for n, t in venue_names if t in {"journal", "conference"}), venue)
+    return _rec(
+        provider="openalex", title=w["title"], abstract=abstract, year=w.get("publication_year"),
+        pub_date=w.get("publication_date"), venue=venue, doi=doi, arxiv_id=arx, openalex_id=_oa_id(w["id"]),
+        authors=[{"name": a["author"]["display_name"], "openalex_id": _oa_id(a["author"].get("id"))}
+                 for a in w.get("authorships") or []],
+        references=[_oa_id(r) for r in w.get("referenced_works") or []],
+        links={k: v for k, v in {"pdf": pdf, "doi": doi and f"https://doi.org/{doi}"}.items() if v})
+
+
+def _oa_params(**kw):
+    return {**kw, "api_key": OPENALEX_API_KEY} if OPENALEX_API_KEY else kw
+
+
 def works_openalex(author_id):
-    params = {"filter": f"author.id:{author_id},from_publication_date:{cutoff_date().isoformat()}",
-              "per-page": 200, "cursor": "*", "select": "id,doi,title,publication_year,publication_date,"
-              "abstract_inverted_index,primary_location,locations,authorships,ids,type"}
-    if OPENALEX_API_KEY:
-        params["api_key"] = OPENALEX_API_KEY
+    params = _oa_params(filter=f"author.id:{author_id},from_publication_date:{cutoff_date().isoformat()}",
+                        cursor="*", select=OA_SELECT, **{"per-page": 200})
     recs = []
     while True:
         data = fetch("openalex", "https://api.openalex.org/works", params)
         for w in data["results"]:
-            if not w.get("title") or w.get("type") in {"peer-review", "erratum", "paratext"}:
-                continue
-            inv = w.get("abstract_inverted_index") or {}
-            abstract = " ".join(word for _, word in sorted((p, k) for k, ps in inv.items() for p in ps))
-            arx, pdf, venue_names = None, None, []
-            for loc in w.get("locations") or []:
-                src = loc.get("source") or {}
-                venue_names.append((src.get("display_name") or "", src.get("type")))
-                if "arxiv" in (src.get("display_name") or "").lower() or "arxiv.org" in (loc.get("landing_page_url") or ""):
-                    arx = arx or arxiv_from(loc.get("landing_page_url"))
-                pdf = pdf or loc.get("pdf_url")
-            doi = (w.get("doi") or "").replace("https://doi.org/", "") or None
-            if doi and "arxiv" in doi.lower():
-                arx, doi = arx or arxiv_from(doi), None
-            primary = ((w.get("primary_location") or {}).get("source") or {})
-            venue = primary.get("display_name") or ""
-            if primary.get("type") == "repository":  # prefer a journal/conference location if one exists
-                venue = next((n for n, t in venue_names if t in {"journal", "conference"}), venue)
-            recs.append(_rec(
-                provider="openalex", title=w["title"], abstract=abstract, year=w.get("publication_year"),
-                pub_date=w.get("publication_date"), venue=venue, doi=doi, arxiv_id=arx,
-                openalex_id=w["id"].rsplit("/", 1)[-1],
-                authors=[{"name": a["author"]["display_name"], "openalex_id": (a["author"].get("id") or "").rsplit("/", 1)[-1]}
-                         for a in w.get("authorships") or []],
-                links={k: v for k, v in {"pdf": pdf, "doi": doi and f"https://doi.org/{doi}"}.items() if v}))
+            if w.get("title") and w.get("type") not in {"peer-review", "erratum", "paratext"}:
+                recs.append(_oa_rec(w))
         cursor = data["meta"].get("next_cursor")
         if not cursor or not data["results"]:
             return recs
@@ -281,26 +293,32 @@ def _s2_venue(p):
     return min(acr, key=len) if acr else (p.get("venue") or pv.get("name") or "")
 
 
+S2_FIELDS = "title,year,venue,publicationVenue,externalIds,abstract,authors,publicationDate,openAccessPdf"
+
+
+def _s2_rec(p):
+    ext = p.get("externalIds") or {}
+    pdf = (p.get("openAccessPdf") or {}).get("url") or None
+    return _rec(
+        provider="s2", title=p["title"], abstract=p.get("abstract") or "", year=p.get("year"),
+        pub_date=p.get("publicationDate"), venue=_s2_venue(p),
+        doi=ext.get("DOI") if ext.get("DOI") and "arxiv" not in ext["DOI"].lower() else None,
+        arxiv_id=ext.get("ArXiv"), s2_id=p["paperId"],
+        authors=[{"name": a["name"], "s2_id": a.get("authorId")} for a in p.get("authors") or []],
+        links={k: v for k, v in {"pdf": pdf, "s2": f"https://www.semanticscholar.org/paper/{p['paperId']}"}.items() if v})
+
+
 def works_s2(author_id):
     headers = {"x-api-key": S2_API_KEY} if S2_API_KEY else None
-    fields = "title,year,venue,publicationVenue,externalIds,abstract,authors,publicationDate,openAccessPdf"
     data = fetch("s2", f"https://api.semanticscholar.org/graph/v1/author/{author_id}/papers",
-                 {"fields": fields, "limit": 1000}, headers=headers)
+                 {"fields": S2_FIELDS, "limit": 1000}, headers=headers)
     cut = cutoff_date()
     recs = []
     for p in data.get("data", []):
         d, y = p.get("publicationDate"), p.get("year")
         if (d and d < cut.isoformat()) or (not d and (not y or y < cut.year)) or not p.get("title"):
             continue
-        ext = p.get("externalIds") or {}
-        arx = ext.get("ArXiv")
-        pdf = (p.get("openAccessPdf") or {}).get("url") or None
-        recs.append(_rec(
-            provider="s2", title=p["title"], abstract=p.get("abstract") or "", year=y, pub_date=d,
-            venue=_s2_venue(p), doi=ext.get("DOI") if ext.get("DOI") and "arxiv" not in ext["DOI"].lower() else None,
-            arxiv_id=arx, s2_id=p["paperId"],
-            authors=[{"name": a["name"], "s2_id": a.get("authorId")} for a in p.get("authors") or []],
-            links={k: v for k, v in {"pdf": pdf, "s2": f"https://www.semanticscholar.org/paper/{p['paperId']}"}.items() if v}))
+        recs.append(_s2_rec(p))
     return recs
 
 
@@ -348,7 +366,7 @@ def arxiv_meta(ids):
 
 # ---------- merge + upsert ----------
 
-PRIORITY = {"openalex": 0, "s2": 1, "dblp": 2}
+PRIORITY = {"openalex": 0, "s2": 1, "dblp": 2, "arxiv": 3}
 
 
 def merge(recs):
@@ -374,11 +392,12 @@ def merge(recs):
                 m[f] = m[f] or r[f]
             if not m["authors"] and r["authors"]:
                 m["authors"] = [dict(a) for a in r["authors"]]
+            m["references"] = m["references"] or r.get("references") or []
             m["links"] = {**r["links"], **m["links"]}
         # S2 abstracts are cleaner than OpenAlex's reconstructed ones
         m["abstract"] = next((r["abstract"] for r in sorted(rs, key=lambda r: r["provider"] != "s2") if r["abstract"]), "")
         # venue: DBLP acronym > S2 acronym > OpenAlex name; anything arXiv-ish means preprint
-        venues = [r["venue"] for r in sorted(rs, key=lambda r: {"dblp": 0, "s2": 1, "openalex": 2}[r["provider"]])]
+        venues = [r["venue"] for r in sorted(rs, key=lambda r: {"dblp": 0, "s2": 1, "openalex": 2, "arxiv": 3}[r["provider"]])]
         m["venue"] = short_venue(next((v for v in venues if not is_preprint_venue(v)), ""))
         s2a = next((r["authors"] for r in rs if r["provider"] == "s2"), [])
         if len(s2a) == len(m["authors"]):
@@ -409,7 +428,7 @@ def upsert(db, key, m, source_id, run_id):
     if p is None:
         p = Paper(norm_title=key, title=m["title"], abstract=m["abstract"], year=m["year"], pub_date=m["pub_date"],
                   venue=m["venue"], is_preprint=preprint, authors=m["authors"], doi=m["doi"], arxiv_id=m["arxiv_id"],
-                  s2_id=m["s2_id"], openalex_id=m["openalex_id"], links=links)
+                  s2_id=m["s2_id"], openalex_id=m["openalex_id"], links=links, references=m.get("references") or [])
         db.add(p)
         db.flush()
         changes.append(("NEW", ""))
@@ -433,12 +452,14 @@ def upsert(db, key, m, source_id, run_id):
         for f in ("abstract", "year", "pub_date", "doi", "arxiv_id", "s2_id", "openalex_id"):
             if m[f] and not getattr(p, f):
                 setattr(p, f, m[f])
+        if m.get("references"):
+            p.references = m["references"]  # citation lists grow; not a user-facing change
         if diff:
             changes.append(("UPDATED", ", ".join(diff)))
             p.updated_at = now()
-    if not db.get(PaperSource, (p.id, source_id)):
+    if source_id and not db.get(PaperSource, (p.id, source_id)):
         db.add(PaperSource(paper_id=p.id, source_id=source_id))
-    if run_id:
+    if run_id and source_id:
         for kind, detail in changes:
             if not db.query(PaperChange).filter_by(run_id=run_id, paper_id=p.id, kind=kind).first():
                 db.add(PaperChange(run_id=run_id, paper_id=p.id, source_id=source_id, kind=kind, detail=detail))
@@ -449,7 +470,6 @@ def upsert(db, key, m, source_id, run_id):
 
 def collect_source(source_id, run_id=None, progress=lambda msg: None):
     """Collect the 2-year window for one source. Returns (stats, errors). Provider failures are partial, not fatal."""
-    from . import keywords  # heavy import (torch) only when collecting
 
     errors, recs = [], []
     with Session() as db:
@@ -509,12 +529,7 @@ def collect_source(source_id, run_id=None, progress=lambda msg: None):
             stats["papers"] += 1
             stats.update(kinds)
         db.commit()
-        todo = [p for p in db.query(Paper).join(PaperSource).filter(PaperSource.source_id == source_id)
-                if not p.keywords]
-        if todo:
-            progress(f"키워드 추출: {len(todo)}편 (KeyBERT, CPU)")
-            for p, kws in zip(todo, keywords.extract([f"{p.title}. {p.abstract or ''}" for p in todo])):
-                p.keywords = kws
+        enrich(db.query(Paper).join(PaperSource).filter(PaperSource.source_id == source_id).all(), progress)
         src = db.get(Source, source_id)
         src.keywords = [k for k, _ in Counter(k for p in db.query(Paper).join(PaperSource)
                                               .filter(PaperSource.source_id == source_id) for k in p.keywords or []).most_common(5)]
@@ -528,6 +543,91 @@ def collect_source(source_id, run_id=None, progress=lambda msg: None):
         db.commit()
     log.info("source %s collected: %s errors=%s", source_id, dict(stats), errors)
     return dict(stats), errors
+
+
+def enrich(papers, progress=lambda msg: None):
+    """KeyBERT keywords + MiniLM embedding for papers that lack them (CPU, no LLM)."""
+    from . import keywords
+
+    doc = lambda p: f"{p.title}. {p.abstract or ''}"  # noqa: E731
+    todo = [p for p in papers if not p.keywords]
+    if todo:
+        progress(f"키워드 추출: {len(todo)}편 (KeyBERT, CPU)")
+        for p, kws in zip(todo, keywords.extract([doc(p) for p in todo])):
+            p.keywords = kws
+    todo = [p for p in papers if p.embedding is None]
+    if todo:
+        progress(f"임베딩 계산: {len(todo)}편")
+        for p, v in zip(todo, keywords.embed([doc(p) for p in todo])):
+            p.embedding = v.tobytes()
+
+
+def backfill(progress=lambda msg: None):
+    """One-time upgrade for papers collected before embeddings existed."""
+    with Session() as db:
+        enrich(db.query(Paper).filter(Paper.embedding.is_(None)).all(), progress)
+        db.commit()
+
+
+def resolve_reference(db, query="", openalex_id=""):
+    """Paste box of My Research: arXiv link/id, DOI or exact title -> Paper (created from APIs if missing).
+    Returns (paper, candidates); a non-exact title search returns candidates for the user to pick."""
+    query = query.strip()
+    arx = arxiv_from(query) if re.search(r"arxiv|^\d{4}\.\d{4,5}", query, re.I) else None
+    doi_m = re.search(r"10\.\d{4,9}/[^\s\"<>]+", query)
+    doi = doi_m.group(0).rstrip(".") if doi_m and not arx else None
+    if openalex_id:
+        p = db.query(Paper).filter_by(openalex_id=openalex_id).first()
+    elif arx:
+        p = db.query(Paper).filter_by(arxiv_id=arx).first()
+    elif doi:
+        p = db.query(Paper).filter(Paper.doi.ilike(doi)).first()
+    else:
+        p = db.query(Paper).filter_by(norm_title=norm_title(query)).first()
+    if p:
+        return p, []
+    if openalex_id:
+        rec = _oa_rec(fetch("openalex", f"https://api.openalex.org/works/{openalex_id}", _oa_params(select=OA_SELECT)))
+    elif doi:
+        rec = _oa_rec(fetch("openalex", f"https://api.openalex.org/works/doi:{doi}", _oa_params(select=OA_SELECT)))
+    elif arx:
+        try:  # S2 knows where an arXiv paper was eventually published
+            rec = _s2_rec(fetch("s2", f"https://api.semanticscholar.org/graph/v1/paper/arXiv:{arx}",
+                                {"fields": S2_FIELDS}, headers={"x-api-key": S2_API_KEY} if S2_API_KEY else None, retries=3))
+        except ApiError as e:
+            log.warning("S2 lookup for arXiv:%s failed, using arXiv API: %s", arx, e)
+            rec = _arxiv_rec(arx)
+    else:
+        hits = fetch("openalex", "https://api.openalex.org/works",
+                     _oa_params(search=query, select=OA_SELECT, **{"per-page": 5}))["results"]
+        exact = next((w for w in hits if norm_title(w.get("title")) == norm_title(query)), None)
+        if not exact:
+            return None, [{"openalex_id": _oa_id(w["id"]), "title": w.get("title"), "year": w.get("publication_year"),
+                           "venue": "arXiv" if is_preprint_venue(v := _oa_rec(w)["venue"]) else short_venue(v)}
+                          for w in hits if w.get("title")]
+        rec = _oa_rec(exact)
+    m = merge([rec])
+    key, m = next(iter(m.items()))
+    p, _ = upsert(db, key, m, None, None)
+    if m["arxiv_id"] and not p.categories:
+        try:
+            p.categories = arxiv_meta([m["arxiv_id"]]).get(m["arxiv_id"], {}).get("categories", [])
+        except (ApiError, ET.ParseError) as e:
+            log.warning("arxiv categories for %s: %s", m["arxiv_id"], e)
+    enrich([p])
+    return p, []
+
+
+def _arxiv_rec(aid):
+    xml = fetch("arxiv", "https://export.arxiv.org/api/query", {"id_list": aid, "max_results": 1}, as_json=False)
+    e = ET.fromstring(xml).find("a:entry", ATOM)
+    title = re.sub(r"\s+", " ", e.findtext("a:title", "", ATOM)).strip() if e is not None else ""
+    if not title or title.lower() == "error":
+        raise ApiError(f"arxiv: {aid}를 찾을 수 없습니다")
+    published = e.findtext("a:published", "", ATOM)[:10]
+    return _rec(provider="arxiv", title=title, abstract=re.sub(r"\s+", " ", e.findtext("a:summary", "", ATOM)).strip(),
+                year=int(published[:4]) if published else None, pub_date=published or None, arxiv_id=aid,
+                authors=[{"name": a.findtext("a:name", "", ATOM)} for a in e.findall("a:author", ATOM)])
 
 
 def name_tab(src):

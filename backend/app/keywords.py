@@ -22,8 +22,18 @@ def _kw():
 
             name = CFG["keywords"]["model"]
             log.info("loading embedding model %s on CPU", name)
-            _model = KeyBERT(SentenceTransformer(name, device="cpu", cache_folder=str(MODEL_DIR)))
+            _model = KeyBERT(SentenceTransformer(name, revision=CFG["keywords"].get("revision"), device="cpu",
+                                                 cache_folder=str(MODEL_DIR)))
         return _model
+
+
+def embed(docs: list[str]):
+    """Unit-normalized float32 vectors (cosine similarity == dot product)."""
+    import numpy as np
+
+    if not docs:
+        return np.zeros((0, 0), dtype=np.float32)
+    return _kw().model.embedding_model.encode(docs, normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
 
 
 def extract(docs: list[str]) -> list[list[str]]:
@@ -41,3 +51,7 @@ if __name__ == "__main__":
                    "Hyperspectral imaging with a compact snapshot camera and deep reconstruction."])
     print(out)
     assert len(out) == 2 and all(1 <= len(k) <= CFG["keywords"]["top_n"] for k in out)
+    v = embed(["gaussian splatting for novel view synthesis", "3d gaussian splats rendering", "urinary paraben survey"])
+    assert v.shape == (3, 384) and abs(float(v[0] @ v[0]) - 1) < 1e-3, v.shape
+    assert float(v[0] @ v[1]) > float(v[0] @ v[2]) + 0.2  # related texts must embed closer than unrelated ones
+    print("model ok:", CFG["keywords"]["model"], CFG["keywords"].get("revision"))

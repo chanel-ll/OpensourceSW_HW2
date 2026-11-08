@@ -1,6 +1,8 @@
 # secrets & personal settings
 .env
 config.yaml
+# personal markdown notes (paper memos, project notes)
+notes/
 
 # runtime data, logs, model cache
 data/

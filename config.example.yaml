@@ -4,9 +4,16 @@ lookback_days: 730         # collect papers from the last 2 years
 update_interval_days: 7    # weekly update; runs automatically at startup when overdue
 keywords:
   model: sentence-transformers/all-MiniLM-L6-v2   # small CPU embedding model for KeyBERT
+  revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41   # pinned Hugging Face commit of that model
   top_n: 4
 sources:                   # turn individual academic APIs on/off
   openalex: true
   semantic_scholar: true
   dblp: true
   arxiv: true
+notes_dir: notes           # markdown notes (Obsidian-compatible); may point into an Obsidian vault folder
+world:                     # Research World classification
+  assign_threshold: 0.3    # min cosine similarity to join an existing subfield; below it a paper becomes a "새 세부 분야 후보"
+  candidate_min: 3         # how many candidates before the app suggests a new subfield
+  similar_top_k: 3         # semantic-similarity edges per paper
+  similar_min: 0.5         # min similarity for a semantic edge
