@@ -43,6 +43,39 @@ jobs:
         if: failure()
         run: docker logs app || true
 
+      # Explains login failures like "malformed HTTP Authorization header" without ever printing the values.
+      - name: Check Docker Hub secrets (format only)
+        if: github.event_name != 'pull_request'
+        env:
+          U: ${{ secrets.DOCKERHUB_USERNAME }}
+          T: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          ok = True
+          for name, key in (("DOCKERHUB_USERNAME", "U"), ("DOCKERHUB_TOKEN", "T")):
+              v = os.environ.get(key, "")
+              s = v.strip()
+              p = []
+              if not v:
+                  p.append("empty: not a *Repository* secret, or the name is misspelled")
+              if v != s:
+                  p.append("leading/trailing space or newline")
+              if any(ord(c) < 33 or ord(c) > 126 for c in s):
+                  p.append("contains spaces, newlines or non-ASCII (e.g. Korean / full-width) characters")
+              if s and (s[0] in "\"'" or s[-1] in "\"'"):
+                  p.append("wrapped in quotes")
+              if key == "U" and "@" in s:
+                  p.append("looks like an email; use the Docker Hub username")
+              if key == "U" and s != s.lower():
+                  p.append("has uppercase letters; Docker Hub usernames are lowercase")
+              if key == "T" and s and not s.startswith("dckr_pat_"):
+                  p.append("does not start with dckr_pat_ (is this a password instead of an access token?)")
+              print(f"{name}: length {len(v)} -> " + ("OK" if not p else "PROBLEM: " + "; ".join(p)))
+              ok = ok and not p
+          sys.exit(0 if ok else 1)
+          EOF
+
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
