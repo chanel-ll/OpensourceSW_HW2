@@ -16,7 +16,7 @@ DEFAULTS = {
     "update_interval_days": 7,
     # revision = Hugging Face commit, pinned so every machine/image gets the same weights
     "keywords": {"model": "sentence-transformers/all-MiniLM-L6-v2", "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
-                 "top_n": 4, "preprocess": "basic", "ngram_max": 2, "diversity": 0.5},
+                 "top_n": 4, "preprocess": "v2", "ngram_max": 2, "diversity": 0.3},
     "sources": {"semantic_scholar": True, "openalex": True, "dblp": True, "arxiv": True},
     "notes_dir": "notes",            # markdown notes; can point at (a folder inside) an Obsidian vault
     "world": {"assign_threshold": 0.3, "candidate_min": 3, "similar_top_k": 3, "similar_min": 0.5},

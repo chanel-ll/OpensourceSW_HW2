@@ -6,6 +6,9 @@ keywords:
   model: sentence-transformers/all-MiniLM-L6-v2   # small CPU embedding model for KeyBERT
   revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41   # pinned Hugging Face commit of that model
   top_n: 4
+  preprocess: v2            # v2 keeps hyphenated terms and drops filler words (basic = original KeyBERT tokenizer)
+  ngram_max: 2
+  diversity: 0.3            # MMR diversity, chosen on the tuning set (eval/evaluate.py)
 sources:                   # turn individual academic APIs on/off
   openalex: true
   semantic_scholar: true
