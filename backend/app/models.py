@@ -110,6 +110,13 @@ class Project(Base):
     updated_at = Column(DateTime, default=now)
 
 
+class AppMeta(Base):
+    """Small key/value store, e.g. which model produced the stored keywords/embeddings."""
+    __tablename__ = "app_meta"
+    key = Column(String, primary_key=True)
+    value = Column(Text)
+
+
 class LibraryGroup(Base):
     """User-made groups for starred papers; a paper may sit in several groups."""
     __tablename__ = "library_groups"

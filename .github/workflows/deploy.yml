@@ -1,8 +1,8 @@
-name: Deploy — replace local container
+name: Deploy — zero-downtime blue-green
 
-# After CI pushes a new image, the self-hosted Windows runner pulls it and swaps the running container.
-# Service: http://127.0.0.1:8090  (data/notes in Docker volumes, survive every redeploy)
-# Optional on the runner PC: %USERPROFILE%\.paper-universe\.env (LLM keys) and \config.yaml (personal settings).
+# After CI pushes a new image, the self-hosted Windows runner deploys it with blue-green switching behind
+# an nginx proxy, while an independent monitor checks the live service every second.
+# Service: http://127.0.0.1:8090 (data/notes in Docker volumes; settings from %USERPROFILE%\.paper-universe)
 on:
   workflow_run:
     workflows: ["CI — build & push Docker image"]
@@ -20,8 +20,8 @@ defaults:
 
 env:
   IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/paper-universe
-  CONTAINER: paper-universe
-  HOST_PORT: "8090"
+  SERVICE_URL: http://127.0.0.1:8090
+  OUT: ${{ github.workspace }}\deploy-logs
 
 jobs:
   deploy:
@@ -35,6 +35,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
       - name: Check Docker is running
         run: |
           docker version --format "Docker engine {{.Server.Version}} ({{.Server.Os}})"
@@ -59,61 +63,58 @@ jobs:
           "ref=$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "deploying $ref"
 
-      - name: Replace container
-        id: swap
+      # Independent process, started before anything changes; it must see the service healthy first.
+      - name: Start monitor and confirm the current service responds
+        run: |
+          New-Item -ItemType Directory -Force $env:OUT | Out-Null
+          Remove-Item "$env:OUT\*" -Force -ErrorAction SilentlyContinue
+          # Start-Process (PowerShell 5.1) joins arguments without quoting, so quote every path
+          $argv = "-NoProfile -ExecutionPolicy Bypass -File `"$env:GITHUB_WORKSPACE\deploy\monitor.ps1`" " +
+                  "-Url `"$env:SERVICE_URL`" -OutFile `"$env:OUT\monitor.jsonl`" -StopFile `"$env:OUT\stop`" -AfterSeconds 30"
+          $p = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList $argv
+          $p.Id | Out-File "$env:OUT\monitor.pid" -Encoding ascii
+          Write-Host "monitor pid $($p.Id)"
+          $deadline = (Get-Date).AddSeconds(60); $seen = $null
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+            if (Test-Path "$env:OUT\monitor.jsonl") {
+              $last = Get-Content "$env:OUT\monitor.jsonl" -Tail 1 | ConvertFrom-Json
+              if ($last.status -eq 200 -and $last.valid) { $seen = $last; break }
+              # first run after the old single-container deploy: no analyze API yet, but the service is up
+              if ($last.status -in 404, 405) { $seen = $last; Write-Host "current version has no analyze API yet (status $($last.status)); service is up"; break }
+            }
+          }
+          if (-not $seen) { Write-Host "no running service answered before deploy (first deployment?)" }
+          else { Write-Host "pre-deploy response: status=$($seen.status) version=$($seen.version) keywords=$($seen.keywords -join ', ')" }
+
+      - name: Blue-green deploy
         env:
           REF: ${{ steps.pull.outputs.ref }}
         run: |
-          # remember what was running, for rollback
-          $prev = docker ps -aq -f "name=^$($env:CONTAINER)$"
-          $prevImage = if ($prev) { docker inspect -f "{{.Config.Image}}" $env:CONTAINER } else { "" }
-          "prev=$prevImage" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          if ($prev) { cmd /c "docker rm -f $($env:CONTAINER) >nul 2>&1" }
+          & "$env:GITHUB_WORKSPACE\deploy\bluegreen.ps1" -Ref $env:REF -Port 8090 -Events "$env:OUT\events.jsonl"
 
-          $cfgDir = Join-Path $env:USERPROFILE ".paper-universe"
-          $extra = @()
-          if (Test-Path "$cfgDir\.env") { $extra += @("--env-file", "$cfgDir\.env"); Write-Host "using $cfgDir\.env" }
-          if (Test-Path "$cfgDir\config.yaml") { $extra += @("-v", "${cfgDir}\config.yaml:/app/config.yaml:ro"); Write-Host "using $cfgDir\config.yaml" }
-
-          docker run -d --name $env:CONTAINER --restart unless-stopped `
-            -p "127.0.0.1:$($env:HOST_PORT):8000" `
-            -v paper-universe-data:/app/data -v paper-universe-notes:/app/notes -v paper-universe-logs:/app/logs `
-            @extra $env:REF | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "docker run failed" }
-
-      - name: Wait until the service answers
+      - name: Keep monitoring 30 s after deploy
+        if: always()
         run: |
-          $url = "http://127.0.0.1:$($env:HOST_PORT)"
-          $ok = $false
-          $deadline = (Get-Date).AddMinutes(2)
-          while (-not $ok -and (Get-Date) -lt $deadline) {
-            try {
-              $s = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "$url/api/status"
-              $ui = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "$url/"
-              $ok = ($s.Content -match '"llm"') -and ($ui.Content -match '<div id="root">')
-            } catch { }
-            if (-not $ok) { Start-Sleep -Seconds 2 }
-          }
-          if (-not $ok) { throw "service did not answer at $url within 2 minutes" }
-          $state = docker inspect -f "{{.State.Status}} restarts={{.RestartCount}}" $env:CONTAINER
-          Write-Host "deployed and serving at $url ($state)"
-
-      - name: Logs and rollback on failure
-        if: failure() && steps.swap.outcome != 'skipped'
-        env:
-          PREV: ${{ steps.swap.outputs.prev }}
-        run: |
-          Write-Host "---- logs of the failed container ----"
-          cmd /c "docker logs --tail 100 $($env:CONTAINER) 2>&1"
-          if ($env:PREV) {
-            Write-Host "---- rolling back to $($env:PREV) ----"
-            cmd /c "docker rm -f $($env:CONTAINER) >nul 2>&1"
-            $cfgDir = Join-Path $env:USERPROFILE ".paper-universe"
-            $extra = @()
-            if (Test-Path "$cfgDir\.env") { $extra += @("--env-file", "$cfgDir\.env") }
-            if (Test-Path "$cfgDir\config.yaml") { $extra += @("-v", "${cfgDir}\config.yaml:/app/config.yaml:ro") }
-            docker run -d --name $env:CONTAINER --restart unless-stopped -p "127.0.0.1:$($env:HOST_PORT):8000" `
-              -v paper-universe-data:/app/data -v paper-universe-notes:/app/notes -v paper-universe-logs:/app/logs `
-              @extra $env:PREV | Out-Null
-          }
+          New-Item -ItemType File -Force "$env:OUT\stop" | Out-Null
+          $id = Get-Content "$env:OUT\monitor.pid" -ErrorAction SilentlyContinue
+          if ($id) { Wait-Process -Id $id -Timeout 90 -ErrorAction SilentlyContinue; Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+          Write-Host "monitor finished: $((Get-Content "$env:OUT\monitor.jsonl" -ErrorAction SilentlyContinue | Measure-Object).Count) requests"
           exit 0
+
+      - name: Write Summary
+        if: always()
+        env:
+          REF: ${{ steps.pull.outputs.ref }}
+        run: |
+          & "$env:GITHUB_WORKSPACE\deploy\summary.ps1" -OutDir $env:OUT -Url $env:SERVICE_URL -Results "$env:GITHUB_WORKSPACE\eval\results.json" -Image $env:REF
+          Get-Content "$env:OUT\monitor.jsonl" -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+          exit 0
+
+      - name: Upload logs (UTF-8)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-monitor-${{ github.run_id }}
+          path: deploy-logs/
+          if-no-files-found: warn

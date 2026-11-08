@@ -16,7 +16,7 @@ DEFAULTS = {
     "update_interval_days": 7,
     # revision = Hugging Face commit, pinned so every machine/image gets the same weights
     "keywords": {"model": "sentence-transformers/all-MiniLM-L6-v2", "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
-                 "top_n": 4},
+                 "top_n": 4, "preprocess": "basic", "ngram_max": 2, "diversity": 0.5},
     "sources": {"semantic_scholar": True, "openalex": True, "dblp": True, "arxiv": True},
     "notes_dir": "notes",            # markdown notes; can point at (a folder inside) an Obsidian vault
     "world": {"assign_threshold": 0.3, "candidate_min": 3, "similar_top_k": 3, "similar_min": 0.5},
@@ -40,7 +40,8 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").rstrip("/")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.4-nano")
 S2_API_KEY = os.getenv("S2_API_KEY", "")
-OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY", "")  # without it, OpenAlex shares a small daily budget per IP
+OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY", "")
+APP_VERSION = os.getenv("APP_VERSION", "dev")  # image tag baked in at docker build (sha-<commit>)  # without it, OpenAlex shares a small daily budget per IP
 
 for stream in (sys.stdout, sys.stderr):  # Windows cp949 console must not crash on en-dash etc.
     try:

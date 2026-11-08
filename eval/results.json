@@ -1,0 +1,367 @@
+{
+ "data": {
+  "kp20k": {
+   "tune": 30,
+   "final": 70,
+   "license": "CC BY-NC-SA 4.0"
+  },
+  "arxiv": {
+   "tune": 30,
+   "final": 70,
+   "fields": [
+    "cs.CV",
+    "cs.CL",
+    "cs.RO",
+    "cs.CR",
+    "cs.DB"
+   ],
+   "window": "submittedDate:[202501010000 TO 202503312359]",
+   "license": "arXiv metadata CC0"
+  }
+ },
+ "tuning": [
+  {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "preprocess": "basic",
+    "ngram_max": 2,
+    "diversity": 0.5
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.0797
+   },
+   "knn_field_accuracy": 0.9
+  },
+  {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "preprocess": "v2",
+    "ngram_max": 2,
+    "diversity": 0.3
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.0823
+   },
+   "knn_field_accuracy": 0.9
+  },
+  {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "preprocess": "v2",
+    "ngram_max": 2,
+    "diversity": 0.5
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.0704
+   },
+   "knn_field_accuracy": 0.9
+  },
+  {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "preprocess": "v2",
+    "ngram_max": 2,
+    "diversity": 0.7
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.0548
+   },
+   "knn_field_accuracy": 0.9
+  },
+  {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "preprocess": "v2",
+    "ngram_max": 3,
+    "diversity": 0.3
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.0461
+   },
+   "knn_field_accuracy": 0.9
+  },
+  {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "preprocess": "v2",
+    "ngram_max": 3,
+    "diversity": 0.5
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.0175
+   },
+   "knn_field_accuracy": 0.9
+  },
+  {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "preprocess": "v2",
+    "ngram_max": 3,
+    "diversity": 0.7
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.0188
+   },
+   "knn_field_accuracy": 0.9
+  },
+  {
+   "cfg": {
+    "model": "BAAI/bge-small-en-v1.5",
+    "preprocess": "v2",
+    "ngram_max": 2,
+    "diversity": 0.3
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.1127
+   },
+   "knn_field_accuracy": 0.7
+  },
+  {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L12-v2",
+    "preprocess": "v2",
+    "ngram_max": 2,
+    "diversity": 0.3
+   },
+   "keyword_f1@5_present": {
+    "f1": 0.1129
+   },
+   "knn_field_accuracy": 0.8
+  }
+ ],
+ "final": {
+  "baseline": {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "preprocess": "basic",
+    "ngram_max": 2,
+    "diversity": 0.5,
+    "top_n": 5
+   },
+   "keyword_f1@5_present": {
+    "precision": 0.0899,
+    "recall": 0.2082,
+    "f1": 0.1183,
+    "n": 69
+   },
+   "keyword_f1@5_all": {
+    "precision": 0.0886,
+    "recall": 0.1056,
+    "f1": 0.0949,
+    "n": 70
+   },
+   "knn_field_accuracy": 0.7571,
+   "cpu_ms_per_paper": 133.3,
+   "model_mb": 91.6,
+   "examples": [
+    {
+     "title": "query by output",
+     "gold": [
+      "query by output",
+      "at-least-one semantics",
+      "instance-equivalent queries"
+     ],
+     "pred": [
+      "equivalent queries",
+      "data classification",
+      "output qbo",
+      "relationships attributes",
+      "schema hidden"
+     ]
+    },
+    {
+     "title": "Determining the best suited semantic events for cognitive surveillance",
+     "gold": [
+      "cognitive surveillance",
+      "event modeling",
+      "content-based video retrieval",
+      "ontologies",
+      "advanced user interfaces"
+     ],
+     "pred": [
+      "cognitive surveillance",
+      "semantic events",
+      "video indexing",
+      "chases vandalism",
+      "indoor scenes"
+     ]
+    },
+    {
+     "title": "Definition and recognition of rib features in aircraft structural part",
+     "gold": [
+      "feature recognition",
+      "rib",
+      "aircraft structural part",
+      "machining feature"
+     ],
+     "pred": [
+      "rib machining",
+      "manufacturing feature",
+      "features aircraft",
+      "definition recognition",
+      "attribute adjacency"
+     ]
+    }
+   ]
+  },
+  "attempt1_preprocess": {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "preprocess": "v2",
+    "ngram_max": 2,
+    "diversity": 0.3,
+    "top_n": 5
+   },
+   "keyword_f1@5_present": {
+    "precision": 0.1188,
+    "recall": 0.2476,
+    "f1": 0.1503,
+    "n": 69
+   },
+   "keyword_f1@5_all": {
+    "precision": 0.1171,
+    "recall": 0.1271,
+    "f1": 0.1197,
+    "n": 70
+   },
+   "knn_field_accuracy": 0.7571,
+   "cpu_ms_per_paper": 131.0,
+   "model_mb": 91.6,
+   "examples": [
+    {
+     "title": "query by output",
+     "gold": [
+      "query by output",
+      "at-least-one semantics",
+      "instance-equivalent queries"
+     ],
+     "pred": [
+      "queries notions",
+      "query instance-equivalent",
+      "query database",
+      "output queries",
+      "usability database"
+     ]
+    },
+    {
+     "title": "Determining the best suited semantic events for cognitive surveillance",
+     "gold": [
+      "cognitive surveillance",
+      "event modeling",
+      "content-based video retrieval",
+      "ontologies",
+      "advanced user interfaces"
+     ],
+     "pred": [
+      "cognitive surveillance",
+      "video footage",
+      "surveillance domain",
+      "semantic events",
+      "chases vandalism"
+     ]
+    },
+    {
+     "title": "Definition and recognition of rib features in aircraft structural part",
+     "gold": [
+      "feature recognition",
+      "rib",
+      "aircraft structural part",
+      "machining feature"
+     ],
+     "pred": [
+      "rib machining",
+      "rib features",
+      "machining knowledge",
+      "manufacturing feature",
+      "features aircraft"
+     ]
+    }
+   ]
+  },
+  "attempt2_model": {
+   "cfg": {
+    "model": "sentence-transformers/all-MiniLM-L12-v2",
+    "revision": "a50ef00143b4d5391434df20ae11632588ac25be",
+    "preprocess": "v2",
+    "ngram_max": 2,
+    "diversity": 0.3,
+    "top_n": 5
+   },
+   "keyword_f1@5_present": {
+    "precision": 0.113,
+    "recall": 0.2367,
+    "f1": 0.1436,
+    "n": 69
+   },
+   "keyword_f1@5_all": {
+    "precision": 0.1114,
+    "recall": 0.1223,
+    "f1": 0.1144,
+    "n": 70
+   },
+   "knn_field_accuracy": 0.7857,
+   "cpu_ms_per_paper": 208.0,
+   "model_mb": 134.2,
+   "examples": [
+    {
+     "title": "query by output",
+     "gold": [
+      "query by output",
+      "at-least-one semantics",
+      "instance-equivalent queries"
+     ],
+     "pred": [
+      "output queries",
+      "query database",
+      "robust queries",
+      "database schema",
+      "data-driven"
+     ]
+    },
+    {
+     "title": "Determining the best suited semantic events for cognitive surveillance",
+     "gold": [
+      "cognitive surveillance",
+      "event modeling",
+      "content-based video retrieval",
+      "ontologies",
+      "advanced user interfaces"
+     ],
+     "pred": [
+      "cognitive surveillance",
+      "semantic events",
+      "events cognitive",
+      "events video",
+      "footage"
+     ]
+    },
+    {
+     "title": "Definition and recognition of rib features in aircraft structural part",
+     "gold": [
+      "feature recognition",
+      "rib",
+      "aircraft structural part",
+      "machining feature"
+     ],
+     "pred": [
+      "rib machining",
+      "rib features",
+      "abstracted machining",
+      "object-oriented software",
+      "features aircraft"
+     ]
+    }
+   ]
+  }
+ },
+ "selected": {
+  "model": "sentence-transformers/all-MiniLM-L6-v2",
+  "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+  "preprocess": "v2",
+  "ngram_max": 2,
+  "diversity": 0.3,
+  "top_n": 5
+ }
+}

@@ -31,7 +31,7 @@ jobs:
       # Default (docker) builder: layer cache stays on this PC between runs.
       - name: Build image (model download + offline load check)
         run: |
-          docker build --platform linux/amd64 -t paper-universe:ci .
+          docker build --platform linux/amd64 --build-arg APP_VERSION="sha-$($env:GITHUB_SHA.Substring(0,7))" -t paper-universe:ci .
           if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
 
       - name: Smoke test — app starts, UI and API respond
@@ -48,6 +48,11 @@ jobs:
           if ($s.Content -notmatch '"llm"') { throw "unexpected /api/status response" }
           $ui = Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 http://127.0.0.1:18000/
           if ($ui.Content -notmatch '<div id="root">') { throw "UI is not served" }
+          $m = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Method Post -ContentType 'application/json' `
+            -Body '{"title":"Depth completion from sparse time-of-flight sensors","abstract":"We densify sparse depth."}' http://127.0.0.1:18000/api/model/analyze
+          $a = $m.Content | ConvertFrom-Json
+          if (-not $a.keywords -or $a.model.app_version -ne "sha-$($env:GITHUB_SHA.Substring(0,7))") { throw "analyze API / version check failed: $($m.Content)" }
+          Write-Host "analyze OK: $($a.model.app_version) $($a.model.model_id) -> $($a.keywords -join ', ')"
           docker exec pu-ci sh -c "cd backend && python -m app.keywords"
           if ($LASTEXITCODE -ne 0) { throw "model check failed inside the container" }
           Write-Host "smoke test passed"

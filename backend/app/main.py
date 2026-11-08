@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,7 @@ from sqlalchemy import String, cast, func, or_
 from . import bibtex, collect, llm, notes, world
 from .models import (Author, Field, LibraryGroup, LibraryItem, Paper, PaperChange, PaperSource, Project,
                      ProjectReference, Session, Source, Subfield, UpdateRun, now)
-from .settings import CFG, ROOT
+from .settings import APP_VERSION, CFG, ROOT
 
 log = logging.getLogger("api")
 
@@ -62,8 +63,8 @@ async def lifespan(_):
         db.query(UpdateRun).filter_by(status="running").update({"status": "error", "errors": ["앱 종료로 중단됨"]})
         db.query(Source).filter_by(status="collecting").update({"status": "error", "status_message": "앱 종료로 수집이 중단됨 — 다시 수집하세요"})
         db.commit()
-        if db.query(Paper).filter(Paper.embedding.is_(None)).first():
-            submit("embed", collect.backfill)
+        if collect.migration_needed(db):  # new model/preprocessing or papers without embeddings
+            submit("embed", collect.migrate_models)
         if update_due(db):
             log.info("last update >= %s days ago: starting automatic weekly update", CFG["update_interval_days"])
             submit("weekly", collect.weekly_update, "auto")
@@ -71,6 +72,41 @@ async def lifespan(_):
 
 
 app = FastAPI(title="Research Tracker", lifespan=lifespan)
+
+
+# ---------- model info / analysis (also used by the deployment monitor) ----------
+
+def model_info():
+    from . import keywords
+
+    k = CFG["keywords"]
+    return {"name": k["model"], "revision": k.get("revision"), "preprocess": k.get("preprocess", "basic"),
+            "model_id": keywords.model_id(), "app_version": APP_VERSION}
+
+
+@app.get("/api/model")
+def get_model():
+    return model_info()
+
+
+class AnalyzeIn(BaseModel):
+    title: str
+    abstract: str = ""
+
+
+@app.post("/api/model/analyze")
+def analyze(body: AnalyzeIn):
+    """Keyword extraction + embedding on the served model. Public text only, no DB writes, no LLM."""
+    from . import keywords
+
+    if not body.title.strip():
+        raise HTTPException(400, "title을 입력하세요.")
+    t = time.perf_counter()
+    doc = f"{body.title}. {body.abstract}"
+    kws = keywords.extract([doc])[0]
+    vec = keywords.embed([doc])[0]
+    return {"keywords": kws, "embedding_dim": int(vec.shape[0]), "embedding_norm": round(float(np.linalg.norm(vec)), 4),
+            "elapsed_ms": round((time.perf_counter() - t) * 1000, 1), "model": model_info()}
 
 
 # ---------- serializers ----------
@@ -113,6 +149,7 @@ def status():
         return {"llm": llm.status(), "job": job, "last_update": last and last.isoformat() + "Z",
                 "update_due": update_due(db), "unread_changes": unread,
                 "starred_count": db.query(Paper).filter(Paper.starred.is_(True)).count(),
+                "model": model_info(),
                 "credit": None}  # ponytail: gateway balance API unknown; show when ChatKHU documents one
 
 

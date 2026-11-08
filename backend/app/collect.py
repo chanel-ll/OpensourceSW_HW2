@@ -19,7 +19,7 @@ from datetime import date, timedelta
 import httpx
 
 from . import llm
-from .models import Author, Paper, PaperChange, PaperSource, Session, Source, UpdateRun, now
+from .models import AppMeta, Author, Paper, PaperChange, PaperSource, Session, Source, UpdateRun, now
 from .settings import CFG, OPENALEX_API_KEY, S2_API_KEY
 
 log = logging.getLogger("collect")
@@ -562,11 +562,40 @@ def enrich(papers, progress=lambda msg: None):
             p.embedding = v.tobytes()
 
 
-def backfill(progress=lambda msg: None):
-    """One-time upgrade for papers collected before embeddings existed."""
+def _model_ids():
+    from . import keywords
+
+    k = CFG["keywords"]
+    return {"embedding_model": f"{k['model']}@{k.get('revision') or 'main'}", "keyword_model": keywords.model_id()}
+
+
+def migration_needed(db) -> bool:
+    meta = {m.key: m.value for m in db.query(AppMeta)}
+    return any(meta.get(k) != v for k, v in _model_ids().items()) or         db.query(Paper).filter(Paper.embedding.is_(None)).first() is not None
+
+
+def migrate_models(progress=lambda msg: None):
+    """Recompute stored embeddings / auto keywords made by another model or preprocessing.
+    Only auto-generated fields change: subfield assignments (incl. pinned moves/merges), names, notes,
+    Library groups, stars and LLM summaries are left untouched."""
+    ids = _model_ids()
     with Session() as db:
-        enrich(db.query(Paper).filter(Paper.embedding.is_(None)).all(), progress)
+        meta = {m.key: m.value for m in db.query(AppMeta)}
+        if meta.get("embedding_model") != ids["embedding_model"]:
+            progress(f"임베딩 모델 변경 감지: {meta.get('embedding_model')} -> {ids['embedding_model']}")
+            db.query(Paper).update({Paper.embedding: None}, synchronize_session=False)
+        if meta.get("keyword_model") != ids["keyword_model"]:
+            progress("키워드 설정 변경 감지: 자동 키워드 재계산")
+            db.query(Paper).update({Paper.keywords: []}, synchronize_session=False)
         db.commit()
+        enrich(db.query(Paper).filter((Paper.embedding.is_(None)) | (Paper.keywords == [])).all(), progress)
+        for src in db.query(Source):  # tab keywords are derived from paper keywords
+            src.keywords = [k for k, _ in Counter(k for p in db.query(Paper).join(PaperSource)
+                                                  .filter(PaperSource.source_id == src.id) for k in p.keywords or []).most_common(5)]
+        for k, v in ids.items():
+            db.merge(AppMeta(key=k, value=v))
+        db.commit()
+    log.info("model migration done: %s", ids)
 
 
 def resolve_reference(db, query="", openalex_id=""):

@@ -20,15 +20,23 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
+# Download the pinned embedding model into /app/models before copying code, so code changes reuse this layer.
+ARG EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2
+ARG EMBED_REVISION=1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+RUN python -c "from sentence_transformers import SentenceTransformer as S; S('${EMBED_MODEL}', revision='${EMBED_REVISION}', cache_folder='/app/models', device='cpu')"
+
 COPY backend/ backend/
 COPY config.example.yaml .env.example ./
 
-# Download the pinned embedding model into /app/models (same place the app looks).
-RUN cd backend && python -c "from app import keywords; keywords._kw()"
-# Verify it loads from the image alone (no network) and produces sane keywords/embeddings.
+# Verify the model the app is configured for loads from the image alone (no network) and gives sane
+# keywords/embeddings; fails if settings point to a model/revision that was not baked in above.
 RUN cd backend && HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m app.keywords
 
 COPY --from=frontend /app/frontend/dist frontend/dist
+
+# Image version reported by /api/model (CI passes sha-<commit>); last so it never busts the cache above.
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
 
 # Runtime state lives in volumes; run as an unprivileged user.
 RUN useradd --create-home --uid 1000 app && mkdir -p data logs notes && chown -R app:app data logs notes
