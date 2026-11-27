@@ -137,3 +137,11 @@ def test_400_saying_insufficient_is_not_credit_exhaustion():
     post = FakePost(httpx.Response(400, text="max_tokens is insufficient"))
     c = client(post)
     assert c.summarize(TITLE, ABSTRACT, [])["used_fallback"] is True and c.available() is True
+
+
+def test_tab_name_prompt_has_no_copyable_example_lab_name():
+    # security S4 + real run: the LLM copied the prompt example '비주얼컴퓨팅랩' into a Jaesik Park lab name
+    post = FakePost(reply("SNU · 3D Vision Lab · 3D"))
+    client(post).tab_name("Jaesik Park", "Seoul National University", ["Jaesik Park"], ["point cloud"])
+    sent = json.dumps(post.calls, ensure_ascii=False)
+    assert "비주얼컴퓨팅랩" not in sent and "3D Recon" not in sent
