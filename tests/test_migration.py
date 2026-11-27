@@ -5,6 +5,7 @@ import types
 
 import pytest
 
+import app
 from app import collect
 from app.models import AppMeta, Paper, Session
 
@@ -14,6 +15,7 @@ def test_failed_migration_keeps_old_keywords_and_embeddings(monkeypatch):
                                  extract=lambda docs: [["k"] for _ in docs],
                                  embed=lambda docs: (_ for _ in ()).throw(RuntimeError("model crashed")))
     monkeypatch.setitem(sys.modules, "app.keywords", stub)
+    monkeypatch.setattr(app, "keywords", stub, raising=False)   # `from . import keywords` prefers the package attribute
     with Session() as db:
         p = Paper(norm_title="migration test paper", title="Migration Test Paper", abstract="a", authors=[], links={},
                   keywords=["old kw"], embedding=b"old-vector")
