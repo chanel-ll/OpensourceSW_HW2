@@ -12,3 +12,10 @@ models/
 frontend/node_modules/
 frontend/dist/
 *.db
+# nested copies too (COPY backend/ would otherwise pick up backend/.env)
+**/.env
+**/.env.*
+!.env.example
+**/config.yaml
+deploy-logs/
+eval/data/

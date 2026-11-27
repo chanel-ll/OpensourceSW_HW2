@@ -6,7 +6,8 @@
 param(
     [Parameter(Mandatory)][string]$Ref,     # image to deploy, e.g. chaniii1/paper-universe:sha-1234567
     [int]$Port = 8090,
-    [string]$Events = ""                    # JSONL timeline for the monitoring summary
+    [string]$Events = "",                   # JSONL timeline for the monitoring summary
+    [string]$Want = ""                      # version the new container must report (sha-<commit>); checked before switching
 )
 $ErrorActionPreference = 'Stop'
 $Net = "pu-net"; $Proxy = "pu-proxy"; $ProxyImage = "nginx:1.28-alpine"; $Legacy = "paper-universe"
@@ -73,7 +74,7 @@ function InsideCheck($color) {
     $ErrorActionPreference = 'Continue'   # failures are expected while it starts
     $py = "import json,urllib.request as u; h=json.load(u.urlopen('http://127.0.0.1:8000/health',timeout=5)); assert h['status']=='ok', h; " +
           "r=u.Request('http://127.0.0.1:8000/api/model/analyze',data=json.dumps({'title':'Depth completion from sparse time-of-flight sensors','abstract':'We densify sparse depth.'}).encode(),headers={'Content-Type':'application/json'}); " +
-          "a=json.load(u.urlopen(r,timeout=30)); assert a['keywords'] and a['embedding_dim']>0; print(h['version'], a['model']['model_id'], 'llm=' + str(h['llm']['enabled']))"
+          "a=json.load(u.urlopen(r,timeout=30)); assert a['keywords'] and a['embedding_dim']>0; print(h['version'], a['model']['model_id'], 'llm=' + str(h['llm']['enabled']), 'papers=' + str(h.get('papers')))"
     $out = docker exec "paper-universe-$color" python -c $py 2>$null
     if ($LASTEXITCODE -eq 0) { return "$out" } else { return $null }
 }
@@ -91,6 +92,11 @@ if ((Exists $Proxy) -and -not (Running $Proxy)) {
     Start-Sleep -Seconds 2; Event "proxy-restarted" "$Proxy was stopped"
 }
 $active = ActiveColor
+if ((Exists $Proxy) -and -not $active) {
+    # never guess: "blue" could be the live color and would be deleted below
+    Event "rollback" "proxy exists but its active color is unreadable (service untouched)"
+    throw "cannot read the active color from $Proxy; fix the proxy config before deploying"
+}
 $new = if ($active -eq "blue") { "green" } else { "blue" }
 Event "deploy-start" "image=$Ref active=$(if ($active) { $active } else { 'none' }) new=$new"
 
@@ -104,12 +110,28 @@ if ($LASTEXITCODE -ne 0) { Event "rollback" "docker run failed (service untouche
 $ok = $null; $deadline = (Get-Date).AddMinutes(4)   # first start may recompute embeddings (model migration)
 while (-not $ok -and (Get-Date) -lt $deadline) { $ok = InsideCheck $new; if (-not $ok) { Start-Sleep -Seconds 2 } }
 if (-not $ok) {
-    Write-Host "---- logs of paper-universe-$new ----"; cmd /c "docker logs --tail 80 paper-universe-$new 2>&1"
+    # app logs can contain lab URLs and gateway errors: keep them in the uploaded artifact, not the public job log
+    $logFile = if ($Events) { Join-Path (Split-Path $Events) "new-container.log" } else { Join-Path $env:TEMP "pu-new-container.log" }
+    cmd /c "docker logs --tail 200 paper-universe-$new > `"$logFile`" 2>&1"
+    Write-Host "container logs saved to $logFile"
     Quiet "docker rm -f paper-universe-$new"
     Event "rollback" "new container never became healthy (service untouched)"
     throw "new container failed health/analyze check"
 }
 Event "new-ready" "$new $ok"
+$newVersion = ($ok -split " ")[0]
+if ($Want -and $newVersion -ne $Want) {
+    Quiet "docker rm -f paper-universe-$new"
+    Event "rollback" "new container reports $newVersion, expected $Want (service untouched)"
+    throw "pulled image is $newVersion, not $Want"
+}
+$live = PublicVersion   # what users see now
+$newPapers = if ("$ok" -match "papers=(\d+)") { [int]$Matches[1] } else { -1 }
+if ($live -and $live.papers -gt 0 -and $newPapers -eq 0) {
+    Quiet "docker rm -f paper-universe-$new"
+    Event "rollback" "new container sees 0 papers, live service has $($live.papers): data volume missing? (service untouched)"
+    throw "new container sees an empty database"
+}
 
 # ---------- 3) switch traffic ----------
 if (Exists $Proxy) {
@@ -140,7 +162,7 @@ if (Exists $Proxy) {
 Event "switched" "traffic -> $new"
 
 # ---------- 4) confirm through the public URL ----------
-$want = ($ok -split " ")[0]
+$want = $newVersion
 $seen = $null; $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline) { $seen = PublicVersion; if ($seen -and $seen.version -eq $want) { break }; Start-Sleep -Milliseconds 500 }
 if (-not $seen -or $seen.version -ne $want) {
@@ -151,5 +173,7 @@ if (-not $seen -or $seen.version -ne $want) {
 Event "verified" "http://127.0.0.1:$Port/health version=$($seen.version) db=$($seen.db) llm=$($seen.llm.enabled)"
 
 # ---------- 5) retire the old color (after in-flight requests drain) ----------
-if ($active) { Start-Sleep -Seconds 3; Quiet "docker rm -f paper-universe-$active"; Event "old-stopped" $active }
+if ($active) {   # graceful stop lets in-flight requests and DB writes finish before removal
+    Start-Sleep -Seconds 3; Quiet "docker stop -t 20 paper-universe-$active"; Quiet "docker rm -f paper-universe-$active"; Event "old-stopped" $active
+}
 Event "deploy-done" "active=$new"
