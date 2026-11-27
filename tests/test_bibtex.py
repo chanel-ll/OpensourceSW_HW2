@@ -35,3 +35,10 @@ def test_export_keys_unique():
     out = export([paper("Same words here"), paper("Same words there"), paper("Same words")])
     ks = re.findall(r"@\w+\{([^,]+),", out)
     assert len(ks) == len(set(ks)) == 3
+
+
+def test_empty_author_name_and_missing_title_do_not_crash():
+    # review C8: arXiv can yield an empty author name; /bibtex returned 500
+    p = SimpleNamespace(title=None, authors=[{"name": ""}], year=2024, venue="", is_preprint=True,
+                        arxiv_id=None, categories=[], doi=None, links={})
+    assert key(p, set()) == "anon2024paper"
