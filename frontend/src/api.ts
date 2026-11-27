@@ -1,6 +1,7 @@
 export type Author = { name: string; openalex_id?: string; s2_id?: string }
 export type Change = { kinds: string[]; detail: string[]; read: boolean; ids: number[]; source_id: number | null }
-export type Summary = { one_line: string; contributions: string[]; keywords: string[]; model: string }
+export type Summary = { one_line: string; contributions: string[]; keywords: string[]; model: string; used_fallback?: boolean; reason?: string }
+export type LlmStats = { calls: number; failures: number; discarded: number; fallbacks: number }
 export type Paper = {
   id: number; title: string; abstract: string; year: number | null; pub_date: string | null
   venue: string; is_preprint: boolean; authors: Author[]; links: Record<string, string>
@@ -18,7 +19,7 @@ export type Candidate = {
   paper_count: number | null; recent_papers: { title: string; year: number }[]
 }
 export type Status = {
-  llm: { enabled: boolean; model: string; reason: string }
+  llm: { enabled: boolean; model: string; reason: string; stats?: LlmStats }
   job: { running: boolean; kind: string; message: string; error: string; queued: number }
   last_update: string | null; update_due: boolean; unread_changes: number; starred_count: number; credit: number | null
 }

@@ -83,8 +83,11 @@ export default function App() {
         </form>
         <div className="top-status">
           <span className={`pill${llm.enabled ? ' pill-on' : ''}`} title={llm.reason || `모델 ${llm.model}`}>
-            {llm.enabled ? `LLM ${llm.model} · 크레딧 ${status?.credit ?? '확인 불가'}` : 'LLM 꺼짐 · 요약 비활성'}
+            {llm.enabled ? `LLM ${llm.model} · 크레딧 ${status?.credit ?? '확인 불가'}` : 'LLM 꺼짐 · 대체 요약 사용'}
           </span>
+          {llm.stats && <span className="muted small" title="이 서버가 켜진 뒤의 LLM 운영 수치">
+            LLM 호출 {llm.stats.calls} · 실패 {llm.stats.failures} · 버림 {llm.stats.discarded} · 대체 {llm.stats.fallbacks}
+          </span>}
           <span className="muted">마지막 업데이트 {fmtDate(status?.last_update ?? null)}</span>
           <button onClick={update} disabled={busy}>{busy && status?.job.kind === 'weekly' ? '업데이트 중…' : '지금 업데이트'}</button>
         </div>
