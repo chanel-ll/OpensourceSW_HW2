@@ -24,3 +24,8 @@ def test_interval_comes_from_settings():
 
 def test_clock_in_the_past_is_not_due():
     assert update_due(NOW + timedelta(hours=1), NOW) is False
+
+
+def test_INTENTIONALLY_BROKEN_to_prove_the_deploy_gate():
+    # HW6 step 5: this wrong expectation must stop the pipeline before build/deploy. Reverted right after.
+    assert update_due(NOW - timedelta(days=6), NOW) is True
