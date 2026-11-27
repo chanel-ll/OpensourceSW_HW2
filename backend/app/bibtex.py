@@ -17,12 +17,21 @@ def _esc(s):
 def key(p, used: set):
     last = re.sub(r"[^a-z]", "", _ascii((p.authors or [{"name": "anon"}])[0]["name"].split()[-1].lower())) or "anon"
     word = next((w for w in re.findall(r"[a-z]+", _ascii(p.title.lower())) if len(w) > 3), "paper")
-    k, i = f"{last}{p.year or ''}{word}", 1
-    while k in used:
+    base = f"{last}{p.year or ''}{word}"
+    k, i = base, 0
+    while k in used:   # a..z, then aa, ab, ... (was chr(96+i): skipped 'a' and produced '{' after 26)
         i += 1
-        k = f"{last}{p.year or ''}{word}{chr(96 + i)}"
+        k = base + _suffix(i)
     used.add(k)
     return k
+
+
+def _suffix(n):
+    s = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(97 + r) + s
+    return s
 
 
 def entry(p, used: set):
@@ -58,5 +67,5 @@ if __name__ == "__main__":
     out = export([a, b, c])
     print(out)
     assert "@inproceedings{jang2025splat," in out and "booktitle = {ICCV}" in out
-    assert "@misc{jang2025splatb," in out and "eprint = {2501.00001}" in out
+    assert "@misc{jang2025splata," in out and "eprint = {2501.00001}" in out
     assert "@article{muller2024journal," in out and "title = {{Splat-Based 3D Scene}}" in out

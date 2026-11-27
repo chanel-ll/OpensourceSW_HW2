@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import String, cast, func, or_
 
-from . import bibtex, collect, llm, notes, summary_rules, world
+from . import bibtex, collect, llm, notes, schedule, summary_rules, world
 from .models import (Author, Field, LibraryGroup, LibraryItem, Paper, PaperChange, PaperSource, Project,
                      ProjectReference, Session, Source, Subfield, UpdateRun, now)
 from .settings import APP_VERSION, CFG, ROOT
@@ -52,8 +52,7 @@ def last_update_time(db):
 
 
 def update_due(db):
-    last = last_update_time(db)
-    return last is not None and now() - last >= timedelta(days=CFG["update_interval_days"])
+    return schedule.update_due(last_update_time(db), now(), CFG["update_interval_days"])
 
 
 @asynccontextmanager

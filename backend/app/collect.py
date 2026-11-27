@@ -18,7 +18,7 @@ from datetime import date, timedelta
 
 import httpx
 
-from . import llm, tabname
+from . import changes as changes_rules, llm, tabname
 from .models import AppMeta, Author, Paper, PaperChange, PaperSource, Session, Source, UpdateRun, now
 from .settings import CFG, OPENALEX_API_KEY, S2_API_KEY
 
@@ -433,29 +433,13 @@ def upsert(db, key, m, source_id, run_id):
         db.flush()
         changes.append(("NEW", ""))
     else:
-        diff = []
-        if key != p.norm_title:
-            diff.append("제목")
-            p.title, p.norm_title = m["title"], key
-        if m["authors"] and [a["name"] for a in m["authors"]] != [a["name"] for a in p.authors or []]:
-            diff.append("저자")
-            p.authors = m["authors"]
-        new_links = {**(p.links or {}), **links}
-        if new_links != (p.links or {}):
-            diff.append("링크(" + ", ".join(sorted(set(new_links) - set(p.links or {})) or ["변경"]) + ")")
-            p.links = new_links
-        if p.is_preprint and not preprint:
-            changes.append(("ACCEPTED", m["venue"]))
-            p.is_preprint, p.venue = False, m["venue"]
-        elif m["venue"] and not preprint:
-            p.venue = m["venue"]
-        for f in ("abstract", "year", "pub_date", "doi", "arxiv_id", "s2_id", "openalex_id"):
-            if m[f] and not getattr(p, f):
-                setattr(p, f, m[f])
+        old = {f: getattr(p, f) for f in ("norm_title", "authors", "links", "is_preprint", "venue", *changes_rules.FILL_ONLY)}
+        patch, changes = changes_rules.compare(old, {**m, "norm_title": key, "links": links})
+        for f, v in patch.items():
+            setattr(p, f, v)
         if m.get("references"):
             p.references = m["references"]  # citation lists grow; not a user-facing change
-        if diff:
-            changes.append(("UPDATED", ", ".join(diff)))
+        if any(k == "UPDATED" for k, _ in changes):
             p.updated_at = now()
     if source_id and not db.get(PaperSource, (p.id, source_id)):
         db.add(PaperSource(paper_id=p.id, source_id=source_id))
