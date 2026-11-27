@@ -97,3 +97,13 @@ def test_needs_llm():
     assert needs_llm({**GOOD, "used_fallback": True}) is True
     assert needs_llm({**GOOD, "used_fallback": False}) is False
     assert needs_llm(GOOD) is False          # summaries stored before HW6 had no flag: they came from the LLM
+
+
+# ---- learned from the real ChatKHU run (gpt-5.4-nano, 2026-11-27) ----
+# The real reply was pretty-printed over many lines; gateway models also often wrap JSON in ```json fences.
+def test_real_style_multiline_and_fenced_json_is_accepted():
+    pretty = json.dumps(GOOD, ensure_ascii=False, indent=2)
+    for content in (pretty, f"```json\n{pretty}\n```"):
+        post = FakePost(reply(content))
+        s = client(post).summarize(TITLE, ABSTRACT, [])
+        assert len(post.calls) == 1 and s["used_fallback"] is False and s["one_line"] == GOOD["one_line"]
