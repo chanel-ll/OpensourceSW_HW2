@@ -1,0 +1,5 @@
+# Offline unit tests only: no torch / KeyBERT / model downloads.
+httpx==0.28.1
+python-dotenv==1.2.4
+PyYAML==6.0.3
+pytest==9.2.0
