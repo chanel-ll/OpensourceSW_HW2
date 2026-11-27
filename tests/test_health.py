@@ -36,3 +36,29 @@ def test_summarize_api_falls_back_when_llm_is_down(monkeypatch):
     assert r.status_code == 200
     s = r.json()["summary"]
     assert s["used_fallback"] is True and s["one_line"] == "First sentence here." and s["model"] == "fallback"
+
+
+# ---- review fixes ----
+def test_unknown_host_is_rejected():
+    # security S3: DNS rebinding — a page on evil.example resolving to 127.0.0.1 must not reach the API
+    assert api.get("/health", headers={"Host": "evil.example"}).status_code == 400
+    assert api.get("/health", headers={"Host": "127.0.0.1:8090"}).status_code == 200
+    assert api.get("/health", headers={"Host": "localhost:8000"}).status_code == 200
+
+
+def test_status_never_contains_the_key():
+    assert "test-secret-key" not in api.get("/api/status").text
+
+
+def test_health_counts_papers_and_reports_a_read_only_db_as_degraded(monkeypatch, tmp_path):
+    # deployment D6: "select 1" passed on an empty or read-only DB
+    assert isinstance(api.get("/health").json()["papers"], int)
+    import sqlite3
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    db_file = tmp_path / "ro.db"
+    sqlite3.connect(db_file).execute("create table app_meta (key varchar primary key, value varchar)").connection.commit()
+    ro = create_engine(f"sqlite:///file:{db_file.as_posix()}?mode=ro&uri=true")
+    monkeypatch.setattr(main, "Session", sessionmaker(ro))
+    h = api.get("/health").json()
+    assert h["status"] == "degraded" and h["db"].startswith("error")

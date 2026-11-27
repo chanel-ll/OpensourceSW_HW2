@@ -3,7 +3,9 @@ name: CI/CD — test → build → deploy
 # test   : GitHub-hosted Ubuntu, no secrets, offline pytest (also on pull requests)
 # build  : self-hosted Windows PC, only for pushes to main, only if test passed
 # deploy : self-hosted Windows PC, only if build passed — blue-green behind nginx, /health version check, rollback
-# Pull requests never reach the self-hosted jobs, so code from a PR does not run on this PC.
+# The if-guards below are NOT a security boundary: a pull_request run uses the workflow file from the PR itself.
+# Fork PRs are stopped by Settings > Actions > "Require approval for all external contributors" (self-hosted runner).
+# Actions are pinned to commit SHAs (tags can be moved).
 on:
   push:
     branches: [main]
@@ -30,8 +32,8 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
           cache: pip
@@ -46,7 +48,7 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Windows]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check Docker is running
         run: |
@@ -123,14 +125,14 @@ jobs:
           if ($bad) { exit 1 }
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Tags
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.IMAGE }}
           tags: |
@@ -144,6 +146,7 @@ jobs:
         run: |
           foreach ($t in ($env:TAGS -split "`r?`n" | Where-Object { $_ })) {
             docker tag paper-universe:ci $t
+            if ($LASTEXITCODE -ne 0) { throw "tag failed: $t" }
             docker push $t
             if ($LASTEXITCODE -ne 0) { throw "push failed: $t" }
           }
@@ -156,15 +159,22 @@ jobs:
       group: deploy-local
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check Docker is running
         run: |
           docker version --format "Docker engine {{.Server.Version}} ({{.Server.Os}})"
           if ($LASTEXITCODE -ne 0) { throw "Docker Desktop is not running on the runner PC" }
 
+      # "Re-run" of an older green run would otherwise deploy an old commit over a newer one.
+      - name: Refuse to deploy a commit that is no longer main HEAD
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          $head = ((git ls-remote origin refs/heads/main) -split "\s+")[0]
+          if ($head -ne $env:GITHUB_SHA) { throw "this run is for $env:GITHUB_SHA but main is $head; use workflow_dispatch for a deliberate rollback" }
+
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -210,7 +220,7 @@ jobs:
           FACTCHAT_API_KEY: ${{ secrets.FACTCHAT_API_KEY }}   # only this step sees the LLM key
         run: |
           if (-not $env:FACTCHAT_API_KEY) { Write-Host "::warning::FACTCHAT_API_KEY secret is empty: the service runs with fallback summaries" }
-          & "$env:GITHUB_WORKSPACE\deploy\bluegreen.ps1" -Ref $env:REF -Port 8090 -Events "$env:OUT\events.jsonl"
+          & "$env:GITHUB_WORKSPACE\deploy\bluegreen.ps1" -Ref $env:REF -Port 8090 -Events "$env:OUT\events.jsonl" -Want "sha-$($env:GITHUB_SHA.Substring(0,7))"
 
       - name: Confirm /health serves this commit
         run: |
@@ -238,7 +248,7 @@ jobs:
 
       - name: Upload logs (UTF-8)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deploy-monitor-${{ github.run_id }}
           path: deploy-logs/

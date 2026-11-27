@@ -51,3 +51,7 @@ svc.cmd
 eval/data/
 deploy-logs/
 .pytest_cache/
+
+# env variants (keep the example)
+.env.*
+!.env.example

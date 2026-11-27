@@ -65,10 +65,11 @@ def test_no_key_falls_back_without_calling():
     assert c.stats["fallbacks"] == 1
 
 
-def test_timeout_twice_falls_back():
-    post = FakePost(httpx.ReadTimeout("slow"), httpx.ReadTimeout("slow"))
+def test_timeout_falls_back_without_a_second_wait():
+    # review C6: a timeout already cost up to 60 s under the summary lock; retrying doubled it
+    post = FakePost(httpx.ReadTimeout("slow"), reply(json.dumps(GOOD)))
     s = client(post).summarize(TITLE, ABSTRACT, [])
-    assert len(post.calls) == 2 and s["used_fallback"] is True
+    assert len(post.calls) == 1 and s["used_fallback"] is True
 
 
 def test_credit_exhausted_falls_back_and_disables_further_calls():
@@ -107,3 +108,40 @@ def test_real_style_multiline_and_fenced_json_is_accepted():
         post = FakePost(reply(content))
         s = client(post).summarize(TITLE, ABSTRACT, [])
         assert len(post.calls) == 1 and s["used_fallback"] is False and s["one_line"] == GOOD["one_line"]
+
+
+# ---- review fixes (correctness reviewer) ----
+def test_malformed_200_body_is_retried_not_a_500():
+    # C1: gateway answered 200 with an error object / HTML instead of choices[]
+    for bad in (httpx.Response(200, json={"error": {"message": "overloaded"}}), httpx.Response(200, text="<html>busy</html>")):
+        post = FakePost(bad, reply(json.dumps(GOOD)))
+        s = client(post).summarize(TITLE, ABSTRACT, [])
+        assert len(post.calls) == 2 and s["used_fallback"] is False
+
+
+def test_empty_tab_name_reply_does_not_raise():
+    # C2: "" / null content crashed source collection
+    for content in ("", "   ", None):
+        assert client(FakePost(reply(content))).tab_name("p", "i", [], []) == ""
+
+
+def test_rate_limit_mentioning_quota_is_backed_off_not_treated_as_no_credit():
+    # C3: "token quota exceeded" on a 429 disabled the LLM until restart
+    post = FakePost(httpx.Response(429, text="Rate limit: per-minute token quota exceeded"), reply(json.dumps(GOOD)))
+    c = client(post)
+    s = c.summarize(TITLE, ABSTRACT, [])
+    assert s["used_fallback"] is False and c.available() is True and len(post.calls) == 2
+
+
+def test_400_saying_insufficient_is_not_credit_exhaustion():
+    post = FakePost(httpx.Response(400, text="max_tokens is insufficient"))
+    c = client(post)
+    assert c.summarize(TITLE, ABSTRACT, [])["used_fallback"] is True and c.available() is True
+
+
+def test_tab_name_prompt_has_no_copyable_example_lab_name():
+    # security S4 + real run: the LLM copied the prompt example '비주얼컴퓨팅랩' into a Jaesik Park lab name
+    post = FakePost(reply("SNU · 3D Vision Lab · 3D"))
+    client(post).tab_name("Jaesik Park", "Seoul National University", ["Jaesik Park"], ["point cloud"])
+    sent = json.dumps(post.calls, ensure_ascii=False)
+    assert "비주얼컴퓨팅랩" not in sent and "3D Recon" not in sent

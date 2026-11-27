@@ -9,6 +9,7 @@ from urllib.parse import quote
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import String, cast, func, or_, text
@@ -71,6 +72,8 @@ async def lifespan(_):
 
 
 app = FastAPI(title="Research Tracker", lifespan=lifespan)
+# Local-only app: reject other Host headers (DNS rebinding from a web page). The port is ignored.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 
 
 # ---------- model info / analysis (also used by the deployment monitor) ----------
@@ -143,14 +146,17 @@ def _sources_of(db, paper_ids):
 @app.get("/health")
 def health():
     """Deploy gate: the pipeline waits until `version` equals the new commit. Never includes secrets."""
+    papers = None
     try:
         with Session() as db:
-            db.execute(text("select 1"))
+            papers = db.query(Paper).count()   # the deploy refuses a new container that sees 0 papers when the old saw >0
+            db.execute(text("insert or replace into app_meta (key, value) values ('health_probe', '1')"))  # writable?
+            db.rollback()
         db_state = "ok"
     except Exception as e:  # report, do not crash: the deploy step decides
         db_state = f"error: {type(e).__name__}"
     l = llm.status()
-    return {"status": "ok" if db_state == "ok" else "degraded", "db": db_state, "version": APP_VERSION,
+    return {"status": "ok" if db_state == "ok" else "degraded", "db": db_state, "papers": papers, "version": APP_VERSION,
             "llm": {"enabled": l["enabled"], "model": l["model"], "reason": l["reason"], "stats": l["stats"]}}
 
 
