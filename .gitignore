@@ -50,3 +50,4 @@ svc.cmd
 # evaluation data cache (downloaded by eval/evaluate.py) and local deploy logs
 eval/data/
 deploy-logs/
+.pytest_cache/

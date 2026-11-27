@@ -94,7 +94,7 @@ export function PaperCard({ paper: p, llm, registered, onChange, onRead, extra }
       </p>
       {chips.length > 0 && <div className="chips">{chips.map((k) => <span key={k} className="chip">{k}</span>)}</div>}
       {extra}
-      {p.summary && <p className="summary"><b>한줄 요약</b> {p.summary.one_line}</p>}
+      {p.summary && <p className="summary"><b>{p.summary.used_fallback ? '대체 요약' : '한줄 요약'}</b> {p.summary.one_line}</p>}
       {open && (
         <div className="detail">
           {p.summary && p.summary.contributions.length > 0 && (
@@ -110,9 +110,9 @@ export function PaperCard({ paper: p, llm, registered, onChange, onRead, extra }
           {Object.entries(p.links).map(([k, v]) => <a key={k} href={v} target="_blank" rel="noreferrer">{LINK_LABEL[k] ?? k}</a>)}
         </div>
         <div className="actions">
-          {!p.summary && (
-            <button onClick={summarize} disabled={!llm.enabled || busy} title={llm.enabled ? `LLM(${llm.model})으로 제목·abstract 요약` : llm.reason}>
-              {busy ? '요약 중…' : '요약'}
+          {(!p.summary || (p.summary.used_fallback && llm.enabled)) && (
+            <button onClick={summarize} disabled={busy} title={llm.enabled ? `LLM(${llm.model})으로 제목·abstract 요약` : `${llm.reason} — abstract 첫 문장으로 대체 요약`}>
+              {busy ? '요약 중…' : p.summary ? 'LLM으로 다시 요약' : '요약'}
             </button>
           )}
           <button onClick={() => patch({ starred: !p.starred })} aria-pressed={p.starred} title="관심 표시 — Research World에 포함">

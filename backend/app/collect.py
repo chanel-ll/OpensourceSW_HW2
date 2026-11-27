@@ -18,7 +18,7 @@ from datetime import date, timedelta
 
 import httpx
 
-from . import llm
+from . import llm, tabname
 from .models import AppMeta, Author, Paper, PaperChange, PaperSource, Session, Source, UpdateRun, now
 from .settings import CFG, OPENALEX_API_KEY, S2_API_KEY
 
@@ -666,18 +666,18 @@ def name_tab(src):
     affs = Counter(a.affiliation.split("; ")[0] for a in src.authors if a.affiliation)
     inst = affs.most_common(1)[0][0] if affs else ""
     inst_short = acronym(inst) if len(inst) > 20 and len(acronym(inst)) >= 3 else inst
+    rule = tabname.heuristic(src.page_title, inst_short, src.authors[0].name if src.authors else "", src.keywords)
+    raw = None
     if llm.available():
         try:
-            src.name = llm.tab_name(src.page_title, inst, [a.name for a in src.authors], src.keywords)
-            src.name_source = "llm"
-            return
+            raw = llm.tab_name(src.page_title, inst, [a.name for a in src.authors], src.keywords)
         except llm.LLMError as e:
             log.warning("tab name via LLM failed, using heuristic: %s", e)
-    lab = re.split(r"\s[\(\|\-–,:]|,", src.page_title or "")[0].strip() or (src.authors[0].name if src.authors else "")
-    if inst_short and lab.lower().startswith(inst_short.lower()):
-        lab = lab[len(inst_short):].strip()
-    src.name = " · ".join(x for x in (inst_short, lab, src.keywords[0] if src.keywords else "") if x)
-    src.name_source = "auto"
+    picked = tabname.choose(raw, None)
+    if raw is not None and picked is None:
+        llm.client.stats["discarded"] += 1
+        log.warning("LLM tab name rejected (%r), using heuristic", raw)
+    src.name, src.name_source = (picked, "llm") if picked else (rule, "auto")
 
 
 def weekly_update(trigger="manual", progress=lambda msg: None):

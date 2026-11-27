@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import String, cast, func, or_
 
-from . import bibtex, collect, llm, notes, world
+from . import bibtex, collect, llm, notes, summary_rules, world
 from .models import (Author, Field, LibraryGroup, LibraryItem, Paper, PaperChange, PaperSource, Project,
                      ProjectReference, Session, Source, Subfield, UpdateRun, now)
 from .settings import APP_VERSION, CFG, ROOT
@@ -343,18 +343,14 @@ _summary_lock = threading.Lock()
 
 @app.post("/api/papers/{pid}/summarize")
 def summarize(pid: int):
-    """Called only from the 요약 button. Stored result is returned forever after; never re-calls the LLM."""
+    """Called only from the 요약 button. A stored LLM summary is final; a fallback summary may be upgraded later.
+    Never fails: without a working LLM the rule-based fallback is stored and shown as such."""
     with _summary_lock, Session() as db:
         p = db.get(Paper, pid) or _404()
-        if p.summary:
+        if not summary_rules.needs_llm(p.summary):
             return paper_json(p, _sources_of(db, [p.id]).get(p.id))
-        if not llm.available():
-            raise HTTPException(503, llm.status()["reason"])
-        try:
-            s = llm.summarize(p.title, p.abstract)  # public data only
-        except llm.LLMError as e:
-            raise HTTPException(503, str(e))
-        p.summary = {**s, "model": llm.LLM_MODEL, "created_at": now().isoformat() + "Z"}
+        s = llm.summarize(p.title, p.abstract, p.keywords or [])  # public data only
+        p.summary = {**s, "model": "fallback" if s["used_fallback"] else llm.LLM_MODEL, "created_at": now().isoformat() + "Z"}
         db.commit()
         return paper_json(p, _sources_of(db, [p.id]).get(p.id))
 

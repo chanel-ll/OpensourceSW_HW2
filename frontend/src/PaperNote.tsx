@@ -81,14 +81,18 @@ export function PaperNote({ id, llm, registered }: { id: number; llm: Status['ll
           <h2>AI 요약</h2>
           {p.summary ? (
             <>
-              <p className="summary"><b>한줄 요약</b> {p.summary.one_line}</p>
+              <p className="summary"><b>{p.summary.used_fallback ? '대체 요약' : '한줄 요약'}</b> {p.summary.one_line}</p>
               {p.summary.contributions.length > 0 && <ul>{p.summary.contributions.map((c, i) => <li key={i}>{c}</li>)}</ul>}
-              <p className="muted small">{p.summary.model} · 제목과 abstract만 사용해 생성</p>
+              <p className="muted small">{p.summary.used_fallback
+                ? `LLM을 쓸 수 없어 abstract 첫 문장으로 만든 대체 요약 (${p.summary.reason || '이유 없음'})`
+                : `${p.summary.model} · 제목과 abstract만 사용해 생성`}</p>
+              {p.summary.used_fallback && llm.enabled &&
+                <button onClick={summarize} disabled={busy}>{busy ? '요약 중…' : 'LLM으로 다시 요약'}</button>}
             </>
           ) : (
             <>
-              <button className="primary" onClick={summarize} disabled={!llm.enabled || busy} title={llm.reason}>{busy ? '요약 중…' : '요약 생성'}</button>
-              {!llm.enabled && <p className="muted small">{llm.reason}</p>}
+              <button className="primary" onClick={summarize} disabled={busy} title={llm.reason}>{busy ? '요약 중…' : '요약 생성'}</button>
+              {!llm.enabled && <p className="muted small">{llm.reason} — 대체 요약을 만듭니다.</p>}
             </>
           )}
           {err && <p className="error">{err}</p>}
