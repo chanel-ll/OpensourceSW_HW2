@@ -61,13 +61,16 @@ Copy-Item config.example.yaml config.yaml
 
 ## LLM(요약) 설정 — 선택
 
-`.env`를 열어 값을 채웁니다. 비워 두면 요약 버튼만 비활성화되고 이유가 화면에 표시됩니다.
+`.env`를 열어 값을 채웁니다. 비워 두어도 앱 전체가 동작하며, 요약 버튼은 abstract 첫 문장과 자동 키워드로 만든 **대체 요약**을 저장합니다(키가 생긴 뒤 "LLM으로 다시 요약" 가능).
 
 ```env
 LLM_BASE_URL=https://<게이트웨이 주소>/v1     # OpenAI 호환 주소를 /v1까지
-LLM_API_KEY=<발급받은 키>
+FACTCHAT_API_KEY=<발급받은 키>                # 없으면 LLM_API_KEY를 읽음
 LLM_MODEL=gpt-5.4-nano                       # 게이트웨이가 제공하는 경량 모델
 ```
+
+- LLM 응답은 검증(필수 필드, 핵심 기여 3개 이하)을 통과해야 저장됩니다. JSON이 아니면 한 번만 재요청하고, 시간 초과·오류·크레딧 소진이면 대체 요약을 씁니다.
+- 화면 상단과 `/health`에 LLM 호출·실패·버림·대체 횟수가 표시됩니다.
 
 - LLM에는 공개 정보(논문 제목·abstract, 탭 이름 생성 시 연구실 페이지 제목·기관·저자·대표 키워드)만 전송됩니다.
 - **논문 메모와 프로젝트 노트는 절대 전송되지 않습니다.**
@@ -113,16 +116,29 @@ DB와 노트는 볼륨(`paper-universe-data`, `paper-universe-notes`)에 남으�
 
 CI 설정: GitHub 저장소 Settings → Secrets and variables → Actions에 `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`(Docker Hub Access Token, Read & Write)을 등록합니다.
 
-### 자동 배포 (self-hosted runner)
+### CI/CD: test → build → deploy (`.github/workflows/ci.yml`)
 
-CI가 이미지를 Docker Hub에 올리면 `.github/workflows/deploy.yml`이 같은 PC의 self-hosted Windows 러너에서
-그 이미지(`sha-<커밋>`)를 받아 로컬 컨테이너 `paper-universe`를 교체합니다.
+| job | 실행 위치 | 언제 | 하는 일 |
+|---|---|---|---|
+| test | GitHub (ubuntu) | push·PR 모두 | `pytest` (키 없음, 오프라인) |
+| build | self-hosted Windows | main push, test 통과 시 | 이미지 빌드 → smoke test(`/health`, 분석 API) → Docker Hub push |
+| deploy | self-hosted Windows | build 통과 시 | blue-green 배포(nginx 뒤), `/health` 버전 확인, 실패 시 롤백 |
 
-- 접속: **http://127.0.0.1:8090** · 재시작 정책 `unless-stopped`(Docker Desktop이 켜지면 자동 실행)
+- **test가 실패하면 build와 deploy는 실행되지 않습니다.**
+- 접속: **http://127.0.0.1:8090** · 상태 확인: `http://127.0.0.1:8090/health` (`status`, `db`, `papers`, `version`, LLM 수치)
+- Secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `FACTCHAT_API_KEY`(deploy 단계에서만 컨테이너로 전달).
 - 데이터·노트는 Docker 볼륨(`paper-universe-data`, `paper-universe-notes`)에 남아 재배포해도 유지됩니다.
-- 새 컨테이너가 2분 안에 응답하지 않으면 로그를 남기고 이전 이미지로 자동 롤백합니다.
-- 러너 PC의 `%USERPROFILE%\.paper-universe\.env`(LLM 키)와 `config.yaml`이 있으면 컨테이너에 적용됩니다(저장소에는 올라가지 않음).
-- 필요 조건: 러너(`run.cmd` 또는 서비스)와 Docker Desktop 실행 중. Actions 탭의 "Deploy" → Run workflow로 수동 재배포도 가능합니다.
+- 러너 PC의 `%USERPROFILE%\.paper-universe\.env`(LLM 주소 등)와 `config.yaml`이 있으면 컨테이너에 적용됩니다(저장소에는 올라가지 않음).
+- 필요 조건: 러너(`C:\actions-runner\run.cmd`)와 Docker Desktop 실행 중. 공개 저장소이므로 Settings → Actions에서 외부 PR 실행 승인을 켜 둡니다.
+
+## 테스트
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt   # torch·모델 불필요
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+- 실제 LLM·학술 API를 호출하지 않습니다(가짜 `post` 주입). 핵심 규칙 8개와 목록은 [docs/plan.md](docs/plan.md), 작업 규칙은 [AGENTS.md](AGENTS.md), 리뷰 결과는 [docs/review.md](docs/review.md).
 
 ## 노트 파일 (Obsidian 호환)
 
