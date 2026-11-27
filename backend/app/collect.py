@@ -565,14 +565,22 @@ def migrate_models(progress=lambda msg: None):
     ids = _model_ids()
     with Session() as db:
         meta = {m.key: m.value for m in db.query(AppMeta)}
-        if meta.get("embedding_model") != ids["embedding_model"]:
+        emb_changed = meta.get("embedding_model") != ids["embedding_model"]
+        kw_changed = meta.get("keyword_model") != ids["keyword_model"]
+        if emb_changed:
             progress(f"임베딩 모델 변경 감지: {meta.get('embedding_model')} -> {ids['embedding_model']}")
-            db.query(Paper).update({Paper.embedding: None}, synchronize_session=False)
-        if meta.get("keyword_model") != ids["keyword_model"]:
+        if kw_changed:
             progress("키워드 설정 변경 감지: 자동 키워드 재계산")
-            db.query(Paper).update({Paper.keywords: []}, synchronize_session=False)
-        db.commit()
-        enrich(db.query(Paper).filter((Paper.embedding.is_(None)) | (Paper.keywords == [])).all(), progress)
+        # recompute in memory and commit once at the end: if anything fails the stored values stay
+        # (the old container may still be serving them from the same DB during a blue-green switch)
+        papers = db.query(Paper).all()
+        with db.no_autoflush:
+            for p in papers:
+                if emb_changed:
+                    p.embedding = None
+                if kw_changed:
+                    p.keywords = []
+            enrich([p for p in papers if p.embedding is None or not p.keywords], progress)
         for src in db.query(Source):  # tab keywords are derived from paper keywords
             src.keywords = [k for k, _ in Counter(k for p in db.query(Paper).join(PaperSource)
                                                   .filter(PaperSource.source_id == src.id) for k in p.keywords or []).most_common(5)]

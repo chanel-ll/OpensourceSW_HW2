@@ -100,8 +100,9 @@ class Client:
         return {**summary_rules.fallback(title, abstract, keywords), "reason": reason}
 
     def tab_name(self, page_title, institution, authors, keywords):
-        prompt = ("연구 소스 탭 이름을 '기관 · 연구실명 · 주력 분야' 형식으로 한 줄만 출력하세요. 기관은 짧은 약칭(예: KAIST), "
-                  "주력 분야는 2~3단어 영어. 예: KAIST 비주얼컴퓨팅랩 · 3D Recon\n"
+        # no concrete example name: in a real run the model copied the example lab name into another lab's tab
+        prompt = ("연구 소스 탭 이름을 '기관 약칭 · 연구실명 · 주력 분야' 형식으로 40자 이내 한 줄만 출력하세요. "
+                  "기관은 짧은 약칭, 주력 분야는 2~3단어 영어. 아래 정보에 없는 연구실명은 만들지 마세요.\n"
                   f"페이지 제목: {page_title}\n기관: {institution}\n저자: {', '.join(authors)}\n대표 키워드: {', '.join(keywords)}")
         lines = (self.chat([{"role": "user", "content": prompt}], max_tokens=40) or "").strip().splitlines()
         return lines[0].strip()[:80] if lines else ""   # tabname.choose validates the rest
