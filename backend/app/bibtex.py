@@ -15,8 +15,10 @@ def _esc(s):
 
 
 def key(p, used: set):
-    last = re.sub(r"[^a-z]", "", _ascii((p.authors or [{"name": "anon"}])[0]["name"].split()[-1].lower())) or "anon"
-    word = next((w for w in re.findall(r"[a-z]+", _ascii(p.title.lower())) if len(w) > 3), "paper")
+    parts = (((p.authors or [{}])[0] or {}).get("name") or "").split()
+    last = re.sub(r"[^a-z]", "", _ascii(parts[-1].lower())) if parts else ""
+    last = last or "anon"
+    word = next((w for w in re.findall(r"[a-z]+", _ascii((p.title or "").lower())) if len(w) > 3), "paper")
     base = f"{last}{p.year or ''}{word}"
     k, i = base, 0
     while k in used:   # a..z, then aa, ab, ... (was chr(96+i): skipped 'a' and produced '{' after 26)
