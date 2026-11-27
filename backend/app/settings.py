@@ -37,11 +37,11 @@ def _load_yaml() -> dict:
 CFG = _load_yaml()
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").rstrip("/")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_API_KEY = os.getenv("FACTCHAT_API_KEY") or os.getenv("LLM_API_KEY", "")   # GitHub Secret name first, old .env name second
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.4-nano")
 S2_API_KEY = os.getenv("S2_API_KEY", "")
 OPENALEX_API_KEY = os.getenv("OPENALEX_API_KEY", "")
-APP_VERSION = os.getenv("APP_VERSION", "dev")  # image tag baked in at docker build (sha-<commit>)  # without it, OpenAlex shares a small daily budget per IP
+APP_VERSION = os.getenv("APP_VERSION", "dev")  # image tag baked in at docker build (sha-<commit>)
 
 for stream in (sys.stdout, sys.stderr):  # Windows cp949 console must not crash on en-dash etc.
     try:

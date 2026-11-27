@@ -1,5 +1,13 @@
-# Offline unit tests only: no torch / KeyBERT / model downloads.
+# Offline unit tests only (CI "test" job): no torch / KeyBERT / model downloads.
+# Same pins as requirements.txt for the packages the app needs to import.
+fastapi==0.162.0
+starlette==1.10.0
+pydantic==2.14.1
+SQLAlchemy==2.1.6
 httpx==0.28.1
 python-dotenv==1.2.4
 PyYAML==6.0.3
+numpy==2.5.4
+scipy==1.18.1
+scikit-learn==1.9.1
 pytest==9.2.0

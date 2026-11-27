@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import String, cast, func, or_
+from sqlalchemy import String, cast, func, or_, text
 
 from . import bibtex, collect, llm, notes, schedule, summary_rules, world
 from .models import (Author, Field, LibraryGroup, LibraryItem, Paper, PaperChange, PaperSource, Project,
@@ -136,6 +136,22 @@ def _sources_of(db, paper_ids):
     for ps in db.query(PaperSource).filter(PaperSource.paper_id.in_(paper_ids)):
         out.setdefault(ps.paper_id, []).append(ps.source_id)
     return out
+
+
+# ---------- health (deploy check) ----------
+
+@app.get("/health")
+def health():
+    """Deploy gate: the pipeline waits until `version` equals the new commit. Never includes secrets."""
+    try:
+        with Session() as db:
+            db.execute(text("select 1"))
+        db_state = "ok"
+    except Exception as e:  # report, do not crash: the deploy step decides
+        db_state = f"error: {type(e).__name__}"
+    l = llm.status()
+    return {"status": "ok" if db_state == "ok" else "degraded", "db": db_state, "version": APP_VERSION,
+            "llm": {"enabled": l["enabled"], "model": l["model"], "reason": l["reason"], "stats": l["stats"]}}
 
 
 # ---------- status ----------

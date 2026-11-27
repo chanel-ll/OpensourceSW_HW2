@@ -1,24 +1,50 @@
-name: CI — build & push Docker image
+name: CI/CD — test → build → deploy
 
-# Runs on the self-hosted Windows runner (Docker Desktop must be running).
-# No pull_request trigger: on a public repo, fork PRs would otherwise run code on this PC.
+# test   : GitHub-hosted Ubuntu, no secrets, offline pytest (also on pull requests)
+# build  : self-hosted Windows PC, only for pushes to main, only if test passed
+# deploy : self-hosted Windows PC, only if build passed — blue-green behind nginx, /health version check, rollback
+# Pull requests never reach the self-hosted jobs, so code from a PR does not run on this PC.
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
-env:
-  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/paper-universe
+permissions:
+  contents: read
 
 defaults:
   run:
     shell: powershell
 
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/paper-universe
+  SERVICE_URL: http://127.0.0.1:8090
+  OUT: ${{ github.workspace }}\deploy-logs
+
 jobs:
-  docker:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install test dependencies (no torch, no model)
+        run: pip install -r requirements-dev.txt
+      - name: Run tests (offline, fake LLM)
+        run: pytest -q
+
+  build:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Windows]
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -34,18 +60,20 @@ jobs:
           docker build --platform linux/amd64 --build-arg APP_VERSION="sha-$($env:GITHUB_SHA.Substring(0,7))" -t paper-universe:ci .
           if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
 
-      - name: Smoke test — app starts, UI and API respond
+      - name: Smoke test — /health, UI and analyze API respond
         run: |
           cmd /c "docker rm -f pu-ci >nul 2>&1"
           docker run -d --name pu-ci -p 127.0.0.1:18000:8000 paper-universe:ci | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "container did not start" }
           $ok = $false
           for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
-            try { $s = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:18000/api/status; $ok = $true }
+            try { $s = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:18000/health; $ok = $true }
             catch { Start-Sleep -Seconds 2 }
           }
-          if (-not $ok) { throw "API did not respond within 2 minutes" }
-          if ($s.Content -notmatch '"llm"') { throw "unexpected /api/status response" }
+          if (-not $ok) { throw "/health did not respond within 2 minutes" }
+          $h = $s.Content | ConvertFrom-Json
+          if ($h.status -ne 'ok' -or $h.version -ne "sha-$($env:GITHUB_SHA.Substring(0,7))") { throw "unexpected /health: $($s.Content)" }
+          Write-Host "/health OK: $($s.Content)"
           $ui = Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 http://127.0.0.1:18000/
           if ($ui.Content -notmatch '<div id="root">') { throw "UI is not served" }
           $m = Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Method Post -ContentType 'application/json' `
@@ -119,3 +147,99 @@ jobs:
             docker push $t
             if ($LASTEXITCODE -ne 0) { throw "push failed: $t" }
           }
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Windows]
+    concurrency:
+      group: deploy-local
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Docker is running
+        run: |
+          docker version --format "Docker engine {{.Server.Version}} ({{.Server.Os}})"
+          if ($LASTEXITCODE -ne 0) { throw "Docker Desktop is not running on the runner PC" }
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull the image CI just pushed
+        id: pull
+        run: |
+          # the build job tagged this commit as sha-<7 chars> (docker/metadata-action type=sha,format=short)
+          $tag = "sha-" + $env:GITHUB_SHA.Substring(0, 7)
+          $ref = "$($env:IMAGE):$tag"
+          docker pull $ref
+          if ($LASTEXITCODE -ne 0) { throw "pull failed: $ref" }
+          "ref=$ref" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "deploying $ref"
+
+      # Independent process, started before anything changes; it must see the service healthy first.
+      - name: Start monitor and confirm the current service responds
+        run: |
+          New-Item -ItemType Directory -Force $env:OUT | Out-Null
+          Remove-Item "$env:OUT\*" -Force -ErrorAction SilentlyContinue
+          # Start-Process (PowerShell 5.1) joins arguments without quoting, so quote every path
+          $argv = "-NoProfile -ExecutionPolicy Bypass -File `"$env:GITHUB_WORKSPACE\deploy\monitor.ps1`" " +
+                  "-Url `"$env:SERVICE_URL`" -OutFile `"$env:OUT\monitor.jsonl`" -StopFile `"$env:OUT\stop`" -AfterSeconds 30"
+          $p = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList $argv
+          $p.Id | Out-File "$env:OUT\monitor.pid" -Encoding ascii
+          Write-Host "monitor pid $($p.Id)"
+          $deadline = (Get-Date).AddSeconds(60); $seen = $null
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+            if (Test-Path "$env:OUT\monitor.jsonl") {
+              $last = Get-Content "$env:OUT\monitor.jsonl" -Tail 1 | ConvertFrom-Json
+              if ($last.status -eq 200 -and $last.valid) { $seen = $last; break }
+              # first run after the old single-container deploy: no analyze API yet, but the service is up
+              if ($last.status -in 404, 405) { $seen = $last; Write-Host "current version has no analyze API yet (status $($last.status)); service is up"; break }
+            }
+          }
+          if (-not $seen) { Write-Host "no running service answered before deploy (first deployment?)" }
+          else { Write-Host "pre-deploy response: status=$($seen.status) version=$($seen.version) keywords=$($seen.keywords -join ', ')" }
+
+      - name: Blue-green deploy
+        env:
+          REF: ${{ steps.pull.outputs.ref }}
+          FACTCHAT_API_KEY: ${{ secrets.FACTCHAT_API_KEY }}   # only this step sees the LLM key
+        run: |
+          if (-not $env:FACTCHAT_API_KEY) { Write-Host "::warning::FACTCHAT_API_KEY secret is empty: the service runs with fallback summaries" }
+          & "$env:GITHUB_WORKSPACE\deploy\bluegreen.ps1" -Ref $env:REF -Port 8090 -Events "$env:OUT\events.jsonl"
+
+      - name: Confirm /health serves this commit
+        run: |
+          $h = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 "$env:SERVICE_URL/health").Content
+          Write-Host $h
+          if (($h | ConvertFrom-Json).version -ne "sha-$($env:GITHUB_SHA.Substring(0,7))") { throw "/health does not report this commit" }
+
+      - name: Keep monitoring 30 s after deploy
+        if: always()
+        run: |
+          New-Item -ItemType File -Force "$env:OUT\stop" | Out-Null
+          $id = Get-Content "$env:OUT\monitor.pid" -ErrorAction SilentlyContinue
+          if ($id) { Wait-Process -Id $id -Timeout 90 -ErrorAction SilentlyContinue; Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+          Write-Host "monitor finished: $((Get-Content "$env:OUT\monitor.jsonl" -ErrorAction SilentlyContinue | Measure-Object).Count) requests"
+          exit 0
+
+      - name: Write Summary
+        if: always()
+        env:
+          REF: ${{ steps.pull.outputs.ref }}
+        run: |
+          & "$env:GITHUB_WORKSPACE\deploy\summary.ps1" -OutDir $env:OUT -Url $env:SERVICE_URL -Results "$env:GITHUB_WORKSPACE\eval\results.json" -Image $env:REF
+          Get-Content "$env:OUT\monitor.jsonl" -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+          exit 0
+
+      - name: Upload logs (UTF-8)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-monitor-${{ github.run_id }}
+          path: deploy-logs/
+          if-no-files-found: warn
