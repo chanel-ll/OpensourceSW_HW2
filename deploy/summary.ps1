@@ -52,7 +52,7 @@ else {
     $md.Add("| 시각 (KST) | 내용 |")
     $md.Add("|---|---|")
     $rows = @()   # deploy events and observed version changes on one time-ordered timeline
-    foreach ($e in $events) { if ($e.event -in "deploy-start", "new-ready", "legacy-stop", "switched", "verified", "rollback", "old-stopped", "deploy-done") { $rows += [pscustomobject]@{ t = (Dt $e.t); text = "**$($e.event)** $(Cell $e.detail)" } } }
+    foreach ($e in $events) { if ($e.event -in "deploy-start", "proxy-restarted", "new-ready", "legacy-stop", "switched", "verified", "rollback", "old-stopped", "deploy-done") { $rows += [pscustomobject]@{ t = (Dt $e.t); text = "**$($e.event)** $(Cell $e.detail)" } } }
     foreach ($v in $versions) { $rows += [pscustomobject]@{ t = (Dt $v.start); text = "📡 응답 버전 → ``$($v.version)`` · ``$(Cell $v.model)``" } }
     foreach ($r in $rows | Sort-Object t) { $md.Add("| $($r.t.ToOffset([TimeSpan]::FromHours(9)).ToString('HH:mm:ss.fff')) | $($r.text) |") }
 

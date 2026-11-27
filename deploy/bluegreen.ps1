@@ -1,7 +1,7 @@
 ﻿# Zero-downtime blue-green deploy on one Windows PC (Docker Desktop).
 #   nginx proxy "pu-proxy" owns http://127.0.0.1:<Port>; app containers "paper-universe-blue|green" have no host port.
 #   1) start the new color next to the running one  2) check it from inside Docker (status + analyze API)
-#   3) graceful nginx reload to the new color        4) confirm via the public URL  5) stop the old color
+#   3) graceful nginx reload to the new color        4) confirm /health version via the public URL  5) stop the old color
 # Anything failing before step 3 never touches the running service; failing after it switches back.
 param(
     [Parameter(Mandatory)][string]$Ref,     # image to deploy, e.g. chaniii1/paper-universe:sha-1234567
@@ -18,6 +18,7 @@ function Event($name, $detail = "") {
     if ($Events) { Add-Content -Path $Events -Value $line -Encoding UTF8 }
 }
 function Exists($name) { [bool](docker ps -aq -f "name=^$name$") }
+function Running($name) { [bool](docker ps -q -f "name=^$name$" -f "status=running") }
 function Quiet($cmd) { cmd /c "$cmd >nul 2>&1"; $global:LASTEXITCODE = 0 }
 
 function ProxyConf($upstream) {
@@ -62,24 +63,33 @@ function AppArgs($color) {
         "-v", "paper-universe-data:/app/data", "-v", "paper-universe-notes:/app/notes", "-v", "paper-universe-logs:/app/logs")
     if (Test-Path "$CfgDir\.env") { $a += @("--env-file", "$CfgDir\.env") }
     if (Test-Path "$CfgDir\config.yaml") { $a += @("-v", "${CfgDir}\config.yaml:/app/config.yaml:ro") }
+    # GitHub Secret from the deploy job; "-e NAME" copies the value from this process, never onto the command line
+    if ($env:FACTCHAT_API_KEY) { $a += @("-e", "FACTCHAT_API_KEY") }
+    if ($env:LLM_BASE_URL) { $a += @("-e", "LLM_BASE_URL") }
     return $a
 }
 function InsideCheck($color) {
     # status + real analysis request from inside the new container (no host port needed)
     $ErrorActionPreference = 'Continue'   # failures are expected while it starts
-    $py = "import json,urllib.request as u; s=json.load(u.urlopen('http://127.0.0.1:8000/api/status',timeout=5)); " +
+    $py = "import json,urllib.request as u; h=json.load(u.urlopen('http://127.0.0.1:8000/health',timeout=5)); assert h['status']=='ok', h; " +
           "r=u.Request('http://127.0.0.1:8000/api/model/analyze',data=json.dumps({'title':'Depth completion from sparse time-of-flight sensors','abstract':'We densify sparse depth.'}).encode(),headers={'Content-Type':'application/json'}); " +
-          "a=json.load(u.urlopen(r,timeout=30)); assert a['keywords'] and a['embedding_dim']>0; print(a['model']['app_version'], a['model']['model_id'])"
+          "a=json.load(u.urlopen(r,timeout=30)); assert a['keywords'] and a['embedding_dim']>0; print(h['version'], a['model']['model_id'], 'llm=' + str(h['llm']['enabled']))"
     $out = docker exec "paper-universe-$color" python -c $py 2>$null
     if ($LASTEXITCODE -eq 0) { return "$out" } else { return $null }
 }
 function PublicVersion {
-    try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://127.0.0.1:$Port/api/model").Content | ConvertFrom-Json }
+    try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://127.0.0.1:$Port/health").Content | ConvertFrom-Json }
     catch { $null }
 }
 
 # ---------- 0) one-time infrastructure ----------
 if (-not (docker network ls -q -f "name=^$Net$")) { docker network create $Net | Out-Null; Event "network-created" $Net }
+# a proxy left stopped (e.g. Docker Desktop was closed) would hide the active color and refuse "nginx -s reload"
+if ((Exists $Proxy) -and -not (Running $Proxy)) {
+    docker start $Proxy | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "stopped proxy $Proxy could not be started" }
+    Start-Sleep -Seconds 2; Event "proxy-restarted" "$Proxy was stopped"
+}
 $active = ActiveColor
 $new = if ($active -eq "blue") { "green" } else { "blue" }
 Event "deploy-start" "image=$Ref active=$(if ($active) { $active } else { 'none' }) new=$new"
@@ -132,13 +142,13 @@ Event "switched" "traffic -> $new"
 # ---------- 4) confirm through the public URL ----------
 $want = ($ok -split " ")[0]
 $seen = $null; $deadline = (Get-Date).AddSeconds(30)
-while ((Get-Date) -lt $deadline) { $seen = PublicVersion; if ($seen -and $seen.app_version -eq $want) { break }; Start-Sleep -Milliseconds 500 }
-if (-not $seen -or $seen.app_version -ne $want) {
+while ((Get-Date) -lt $deadline) { $seen = PublicVersion; if ($seen -and $seen.version -eq $want) { break }; Start-Sleep -Milliseconds 500 }
+if (-not $seen -or $seen.version -ne $want) {
     if ($active) { SetUpstream $active; Event "rollback" "public URL did not serve $want; traffic back to $active" }
     Quiet "docker rm -f paper-universe-$new"
     throw "public URL did not switch to $want"
 }
-Event "verified" "http://127.0.0.1:$Port serves $($seen.app_version) $($seen.model_id)"
+Event "verified" "http://127.0.0.1:$Port/health version=$($seen.version) db=$($seen.db) llm=$($seen.llm.enabled)"
 
 # ---------- 5) retire the old color (after in-flight requests drain) ----------
 if ($active) { Start-Sleep -Seconds 3; Quiet "docker rm -f paper-universe-$active"; Event "old-stopped" $active }
